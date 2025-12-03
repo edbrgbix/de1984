@@ -1,5 +1,6 @@
 package io.github.dorumrr.de1984.data.receiver
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -7,7 +8,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -47,13 +47,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action
 
-        Log.d(TAG, "")
-        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.d(TAG, "║  🔄 BOOT RECEIVER TRIGGERED                                  ║")
-        Log.d(TAG, "║  Action: $action")
-        Log.d(TAG, "║  Android Version: ${Build.VERSION.SDK_INT} (API ${Build.VERSION.SDK_INT})")
-        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-        Log.d(TAG, "")
+        AppLogger.d(TAG, "🔄 BOOT RECEIVER TRIGGERED | Action: $action | Android Version: ${Build.VERSION.SDK_INT} (API ${Build.VERSION.SDK_INT})")
 
         when (action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_LOCKED_BOOT_COMPLETED -> {
@@ -62,26 +56,26 @@ class BootReceiver : BroadcastReceiver() {
                 } else {
                     "BOOT_COMPLETED (after user unlock)"
                 }
-                Log.d(TAG, "📱 Device boot completed - $bootType")
+                AppLogger.d(TAG, "📱 Device boot completed - $bootType")
 
                 // Android 12+ (API 31+): Use WorkManager to avoid foreground service restrictions
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    Log.d(TAG, "Android 12+ detected - scheduling WorkManager job for firewall restoration")
+                    AppLogger.d(TAG, "Android 12+ detected - scheduling WorkManager job for firewall restoration")
                     scheduleBootWorker(context)
                 } else {
-                    Log.d(TAG, "Android 11 or below - directly restoring firewall state")
+                    AppLogger.d(TAG, "Android 11 or below - directly restoring firewall state")
                     restoreFirewallState(context, bootType)
                 }
             }
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                Log.d(TAG, "📦 App package replaced - checking if firewall should be restored")
+                AppLogger.d(TAG, "📦 App package replaced - checking if firewall should be restored")
 
                 // For app updates, we can directly restore on all Android versions
                 // as the app is already in foreground context
                 restoreFirewallState(context, "PACKAGE_REPLACED")
             }
             else -> {
-                Log.w(TAG, "⚠️ Unknown action received: $action")
+                AppLogger.w(TAG, "⚠️ Unknown action received: $action")
             }
         }
 
@@ -94,7 +88,7 @@ class BootReceiver : BroadcastReceiver() {
      */
     private fun scheduleBootWorker(context: Context) {
         try {
-            Log.d(TAG, "Scheduling BootWorker...")
+            AppLogger.d(TAG, "Scheduling BootWorker...")
 
             val workRequest = OneTimeWorkRequestBuilder<BootWorker>()
                 .build()
@@ -105,36 +99,37 @@ class BootReceiver : BroadcastReceiver() {
                 workRequest
             )
 
-            Log.d(TAG, "✅ BootWorker scheduled successfully")
+            AppLogger.d(TAG, "✅ BootWorker scheduled successfully")
 
         } catch (e: IllegalStateException) {
             // WorkManager not initialized yet (can happen at boot time)
             // Fall back to direct restoration
-            Log.e(TAG, "❌ Failed to schedule BootWorker: WorkManager not initialized", e)
-            Log.d(TAG, "⚠️ Falling back to direct firewall restoration")
+            AppLogger.e(TAG, "❌ Failed to schedule BootWorker: WorkManager not initialized", e)
+            AppLogger.d(TAG, "⚠️ Falling back to direct firewall restoration")
             restoreFirewallState(context, "BOOT_COMPLETED (WorkManager fallback)")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to schedule BootWorker", e)
+            AppLogger.e(TAG, "❌ Failed to schedule BootWorker", e)
         }
     }
 
     private fun restoreFirewallState(context: Context, trigger: String) {
         try {
-            Log.d(TAG, "restoreFirewallState: trigger=$trigger")
+            AppLogger.d(TAG, "restoreFirewallState: trigger=$trigger")
 
             val prefs = context.getSharedPreferences(Constants.Settings.PREFS_NAME, Context.MODE_PRIVATE)
             val wasEnabled = prefs.getBoolean(Constants.Settings.KEY_FIREWALL_ENABLED, Constants.Settings.DEFAULT_FIREWALL_ENABLED)
 
-            Log.d(TAG, "Firewall was enabled before $trigger: $wasEnabled")
+            AppLogger.d(TAG, "Firewall was enabled before $trigger: $wasEnabled")
 
             if (wasEnabled) {
-                Log.d(TAG, "✅ Firewall was enabled - proceeding with restoration")
+                AppLogger.d(TAG, "✅ Firewall was enabled - proceeding with restoration")
 
                 // Get FirewallManager from application
                 val app = context.applicationContext as? De1984Application
                 if (app != null) {
                     val firewallManager = app.dependencies.firewallManager
                     val shizukuManager = app.dependencies.shizukuManager
+                    val rootManager = app.dependencies.rootManager
 
                     // Use goAsync() to keep receiver alive while coroutine runs
                     val pendingResult = goAsync()
@@ -143,25 +138,51 @@ class BootReceiver : BroadcastReceiver() {
                     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                     scope.launch {
                         try {
+                            // CRITICAL: Request root permission FIRST to wake up Magisk
+                            // Magisk doesn't grant root permission until the app requests it after boot/update
+                            // Without this, FirewallManager.selectBackend() will think root is not available
+                            // and fall back to VPN backend, which kills user's third-party VPN (like Proton VPN)
+                            AppLogger.d(TAG, "Requesting root permission to wake up Magisk...")
+                            rootManager.forceRecheckRootStatus()
+
+                            // Small delay to allow Magisk to process the permission request
+                            kotlinx.coroutines.delay(500)
+
                             // Wait for Shizuku to be initialized before starting firewall
                             // This is important for ACTION_MY_PACKAGE_REPLACED (app update)
                             // where Shizuku may not be fully initialized yet
-                            Log.d(TAG, "Checking Shizuku status before starting firewall...")
+                            AppLogger.d(TAG, "Checking Shizuku status before starting firewall...")
                             shizukuManager.checkShizukuStatus()
 
                             // Small delay to ensure Shizuku is fully ready
                             kotlinx.coroutines.delay(500)
 
-                            Log.d(TAG, "🚀 Starting firewall after $trigger...")
+                            AppLogger.d(TAG, "🚀 Starting firewall after $trigger...")
                             val result = firewallManager.startFirewall()
                             result.onSuccess { backendType ->
-                                Log.d(TAG, "")
-                                Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                                Log.d(TAG, "║  ✅ FIREWALL RESTORED SUCCESSFULLY                           ║")
-                                Log.d(TAG, "║  Trigger: $trigger")
-                                Log.d(TAG, "║  Backend: $backendType")
-                                Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                                Log.d(TAG, "")
+                                AppLogger.d(TAG, "✅ FIREWALL RESTORED SUCCESSFULLY | Trigger: $trigger | Backend: $backendType")
+
+                                // Reset iptables policies if boot protection was enabled
+                                val bootProtectionEnabled = prefs.getBoolean(
+                                    Constants.Settings.KEY_BOOT_PROTECTION,
+                                    Constants.Settings.DEFAULT_BOOT_PROTECTION
+                                )
+                                if (bootProtectionEnabled) {
+                                    AppLogger.d(TAG, "Boot protection was enabled - resetting iptables policies to ACCEPT")
+                                    try {
+                                        val bootProtectionManager = app.dependencies.bootProtectionManager
+                                        val resetResult = bootProtectionManager.resetIptablesPolicies()
+                                        if (resetResult.isSuccess) {
+                                            AppLogger.d(TAG, "✅ iptables policies reset successfully")
+                                        } else {
+                                            AppLogger.e(TAG, "❌ Failed to reset iptables policies: ${resetResult.exceptionOrNull()?.message}")
+                                        }
+                                    } catch (e: Exception) {
+                                        AppLogger.e(TAG, "❌ Exception while resetting iptables policies", e)
+                                    }
+                                } else {
+                                    AppLogger.d(TAG, "Boot protection not enabled - skipping iptables policy reset")
+                                }
 
                                 // Check if we fell back to VPN and should start monitoring service
                                 if (backendType == FirewallBackendType.VPN) {
@@ -176,7 +197,7 @@ class BootReceiver : BroadcastReceiver() {
                                          shizukuStatus == ShizukuStatus.RUNNING_NO_PERMISSION)
 
                                     if (shouldMonitor) {
-                                        Log.d(TAG, "Started with VPN fallback (Shizuku status: $shizukuStatus). Starting backend monitoring service...")
+                                        AppLogger.d(TAG, "Started with VPN fallback (Shizuku status: $shizukuStatus). Starting backend monitoring service...")
                                         val monitorIntent = Intent(context, BackendMonitoringService::class.java).apply {
                                             action = Constants.BackendMonitoring.ACTION_START
                                             putExtra(Constants.BackendMonitoring.EXTRA_SHIZUKU_STATUS, shizukuStatus.name)
@@ -184,22 +205,16 @@ class BootReceiver : BroadcastReceiver() {
 
                                         try {
                                             context.startForegroundService(monitorIntent)
-                                            Log.d(TAG, "Backend monitoring service started successfully")
+                                            AppLogger.d(TAG, "Backend monitoring service started successfully")
                                         } catch (e: Exception) {
-                                            Log.e(TAG, "Failed to start backend monitoring service", e)
+                                            AppLogger.e(TAG, "Failed to start backend monitoring service", e)
                                         }
                                     } else {
-                                        Log.d(TAG, "Backend monitoring not needed. Mode: $currentMode, Shizuku: $shizukuStatus")
+                                        AppLogger.d(TAG, "Backend monitoring not needed. Mode: $currentMode, Shizuku: $shizukuStatus")
                                     }
                                 }
                             }.onFailure { error ->
-                                Log.e(TAG, "")
-                                Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                                Log.e(TAG, "║  ❌ FAILED TO RESTORE FIREWALL                               ║")
-                                Log.e(TAG, "║  Trigger: $trigger")
-                                Log.e(TAG, "║  Error: ${error.message}")
-                                Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                                Log.e(TAG, "")
+                                AppLogger.e(TAG, "❌ FAILED TO RESTORE FIREWALL | Trigger: $trigger | Error: ${error.message}")
 
                                 // Show notification asking user to open app
                                 // (VPN permission likely needs to be re-granted)
@@ -211,43 +226,27 @@ class BootReceiver : BroadcastReceiver() {
                         }
                     }
                 } else {
-                    Log.e(TAG, "")
-                    Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                    Log.e(TAG, "║  ❌ FAILED TO GET APPLICATION INSTANCE                       ║")
-                    Log.e(TAG, "║  Cannot restore firewall - application context not available ║")
-                    Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                    Log.e(TAG, "")
+                    AppLogger.e(TAG, "❌ FAILED TO GET APPLICATION INSTANCE | Cannot restore firewall - application context not available")
 
                     // Fallback to VPN service for backward compatibility
-                    Log.d(TAG, "Attempting fallback to VPN service...")
+                    AppLogger.d(TAG, "Attempting fallback to VPN service...")
                     val serviceIntent = Intent(context, FirewallVpnService::class.java).apply {
                         action = FirewallVpnService.ACTION_START
                     }
 
                     try {
                         context.startService(serviceIntent)
-                        Log.d(TAG, "✅ VPN service started successfully (fallback)")
+                        AppLogger.d(TAG, "✅ VPN service started successfully (fallback)")
                     } catch (e: Exception) {
-                        Log.e(TAG, "❌ Failed to start VPN service (fallback)", e)
+                        AppLogger.e(TAG, "❌ Failed to start VPN service (fallback)", e)
                     }
                 }
             } else {
-                Log.d(TAG, "")
-                Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                Log.d(TAG, "║  ℹ️  FIREWALL WAS NOT ENABLED                                ║")
-                Log.d(TAG, "║  Skipping firewall restoration after $trigger")
-                Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                Log.d(TAG, "")
+                AppLogger.d(TAG, "ℹ️  FIREWALL WAS NOT ENABLED | Skipping firewall restoration after $trigger")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "")
-            Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-            Log.e(TAG, "║  ❌ ERROR IN BOOT RECEIVER                                   ║")
-            Log.e(TAG, "║  Trigger: $trigger")
-            Log.e(TAG, "║  Error: ${e.message}")
-            Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
-            Log.e(TAG, "")
-            Log.e(TAG, "Stack trace:", e)
+            AppLogger.e(TAG, "❌ ERROR IN BOOT RECEIVER | Trigger: $trigger | Error: ${e.message}")
+            AppLogger.e(TAG, "Stack trace:", e)
         }
     }
 
@@ -297,10 +296,10 @@ class BootReceiver : BroadcastReceiver() {
                 .build()
 
             notificationManager.notify(Constants.BootFailure.NOTIFICATION_ID, notification)
-            Log.d(TAG, "Boot failure notification shown")
+            AppLogger.d(TAG, "Boot failure notification shown")
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to show boot failure notification", e)
+            AppLogger.e(TAG, "Failed to show boot failure notification", e)
         }
     }
 }

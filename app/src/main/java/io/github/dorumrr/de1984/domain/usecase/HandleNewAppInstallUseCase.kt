@@ -2,7 +2,7 @@ package io.github.dorumrr.de1984.domain.usecase
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.util.Log
+import io.github.dorumrr.de1984.utils.AppLogger
 import io.github.dorumrr.de1984.data.common.ErrorHandler
 import io.github.dorumrr.de1984.domain.model.FirewallRule
 import io.github.dorumrr.de1984.domain.repository.FirewallRepository
@@ -86,6 +86,10 @@ class HandleNewAppInstallUseCase constructor(
             Constants.Settings.KEY_DEFAULT_FIREWALL_POLICY,
             Constants.Settings.DEFAULT_FIREWALL_POLICY
         )
+        val allowCritical = prefs.getBoolean(
+            Constants.Settings.KEY_ALLOW_CRITICAL_FIREWALL,
+            Constants.Settings.DEFAULT_ALLOW_CRITICAL_FIREWALL
+        )
 
         val appInfo = packageInfo.applicationInfo ?: return null
         val appName = try {
@@ -96,23 +100,20 @@ class HandleNewAppInstallUseCase constructor(
         val uid = appInfo.uid
         val isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
 
-        // Check if this is a VPN app
+        // Check if this is a critical package (SYSTEM_WHITELIST or VPN app)
+        val isSystemCritical = Constants.Firewall.isSystemCritical(packageName)
         val isVpnApp = hasVpnService(packageName)
+        val isCriticalPackage = isSystemCritical || isVpnApp
 
         // System-recommended apps are ALWAYS allowed, regardless of default policy
         val isRecommendedAllow = Constants.Firewall.isSystemRecommendedAllow(packageName)
 
         return when {
-            // VPN apps MUST ALWAYS be allowed to prevent VPN reconnection issues (unless setting is enabled)
-            isVpnApp -> {
-                val prefs = context.getSharedPreferences(Constants.Settings.PREFS_NAME, Context.MODE_PRIVATE)
-                val allowCritical = prefs.getBoolean(
-                    Constants.Settings.KEY_ALLOW_CRITICAL_FIREWALL,
-                    Constants.Settings.DEFAULT_ALLOW_CRITICAL_FIREWALL
-                )
-
+            // Critical packages (SYSTEM_WHITELIST + VPN apps) - handle based on allowCritical setting
+            isCriticalPackage -> {
                 if (!allowCritical) {
-                    Log.d(TAG, "Creating 'allow all' rule for VPN app: $packageName")
+                    // Setting OFF: Create 'allow all' rule to protect critical package
+                    AppLogger.d(TAG, "Creating 'allow all' rule for critical package (protection ON): $packageName")
                     FirewallRule(
                         packageName = packageName,
                         uid = uid,
@@ -124,31 +125,10 @@ class HandleNewAppInstallUseCase constructor(
                         isSystemApp = isSystemApp
                     )
                 } else {
-                    // Setting is enabled - treat VPN app according to default policy
-                    Log.d(TAG, "Creating default policy rule for VPN app (critical protection disabled): $packageName")
-                    if (defaultPolicy == Constants.Settings.POLICY_BLOCK_ALL) {
-                        FirewallRule(
-                            packageName = packageName,
-                            uid = uid,
-                            appName = appName,
-                            wifiBlocked = true,
-                            mobileBlocked = true,
-                            blockWhenRoaming = true,
-                            enabled = true,
-                            isSystemApp = isSystemApp
-                        )
-                    } else {
-                        FirewallRule(
-                            packageName = packageName,
-                            uid = uid,
-                            appName = appName,
-                            wifiBlocked = false,
-                            mobileBlocked = false,
-                            blockWhenRoaming = false,
-                            enabled = true,
-                            isSystemApp = isSystemApp
-                        )
-                    }
+                    // Setting ON: Don't create a rule - critical package will default to ALLOW
+                    // User can manually change it if they want (critical packages are immune to bulk operations)
+                    AppLogger.d(TAG, "Skipping rule creation for critical package (protection OFF, user can manually configure): $packageName")
+                    null
                 }
             }
             // System-recommended apps always get "allow all" rules

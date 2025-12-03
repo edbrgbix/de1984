@@ -1,9 +1,9 @@
 package io.github.dorumrr.de1984.data.firewall
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 import io.github.dorumrr.de1984.data.common.ErrorHandler
 import io.github.dorumrr.de1984.data.common.RootManager
 import io.github.dorumrr.de1984.data.common.ShizukuManager
@@ -13,8 +13,10 @@ import io.github.dorumrr.de1984.domain.firewall.FirewallBackendType
 import io.github.dorumrr.de1984.domain.model.FirewallRule
 import io.github.dorumrr.de1984.domain.model.NetworkType
 import io.github.dorumrr.de1984.utils.Constants
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * iptables-based firewall backend.
@@ -64,8 +66,8 @@ class IptablesFirewallBackend(
      */
     override suspend fun start(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "=== IptablesFirewallBackend.start() ===")
-            Log.d(TAG, "Starting PrivilegedFirewallService with iptables backend")
+            AppLogger.d(TAG, "=== IptablesFirewallBackend.start() ===")
+            AppLogger.d(TAG, "Starting PrivilegedFirewallService with iptables backend")
 
             // Start the privileged firewall service
             val intent = Intent(context, PrivilegedFirewallService::class.java).apply {
@@ -74,10 +76,10 @@ class IptablesFirewallBackend(
             }
             context.startService(intent)
 
-            Log.d(TAG, "✅ iptables firewall service started")
+            AppLogger.d(TAG, "✅ iptables firewall service started")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start iptables firewall", e)
+            AppLogger.e(TAG, "Failed to start iptables firewall", e)
             val error = errorHandler.handleError(e, "start iptables firewall")
             Result.failure(error)
         }
@@ -88,7 +90,7 @@ class IptablesFirewallBackend(
      */
     suspend fun startInternal(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "startInternal: Creating iptables chains")
+            AppLogger.d(TAG, "startInternal: Creating iptables chains")
 
             // Check availability first
             checkAvailability().getOrElse { error ->
@@ -100,10 +102,10 @@ class IptablesFirewallBackend(
                 return Result.failure(error)
             }
 
-            Log.d(TAG, "✅ iptables chains created")
+            AppLogger.d(TAG, "✅ iptables chains created")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create iptables chains", e)
+            AppLogger.e(TAG, "Failed to create iptables chains", e)
             val error = errorHandler.handleError(e, "create iptables chains")
             Result.failure(error)
         }
@@ -115,8 +117,8 @@ class IptablesFirewallBackend(
      */
     override suspend fun stop(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "Stopping iptables firewall backend")
-            Log.d(TAG, "Stopping PrivilegedFirewallService")
+            AppLogger.d(TAG, "Stopping iptables firewall backend")
+            AppLogger.d(TAG, "Stopping PrivilegedFirewallService")
 
             // Stop the privileged firewall service
             val intent = Intent(context, PrivilegedFirewallService::class.java).apply {
@@ -124,10 +126,10 @@ class IptablesFirewallBackend(
             }
             context.startService(intent)
 
-            Log.d(TAG, "iptables firewall service stopped successfully")
+            AppLogger.d(TAG, "iptables firewall service stopped successfully")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stop iptables firewall", e)
+            AppLogger.e(TAG, "Failed to stop iptables firewall", e)
             val error = errorHandler.handleError(e, "stop iptables firewall")
             Result.failure(error)
         }
@@ -138,24 +140,24 @@ class IptablesFirewallBackend(
      */
     suspend fun stopInternal(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "stopInternal: Deleting iptables chains")
+            AppLogger.d(TAG, "stopInternal: Deleting iptables chains")
 
             // Remove all rules
             clearAllRules().getOrElse { error ->
-                Log.w(TAG, "Failed to clear rules during stop: ${error.message}")
+                AppLogger.w(TAG, "Failed to clear rules during stop: ${error.message}")
             }
 
             // Delete custom chains
             deleteCustomChains().getOrElse { error ->
-                Log.w(TAG, "Failed to delete chains during stop: ${error.message}")
+                AppLogger.w(TAG, "Failed to delete chains during stop: ${error.message}")
             }
 
             blockedUids.clear()
             blockedLanUids.clear()
-            Log.d(TAG, "iptables chains deleted")
+            AppLogger.d(TAG, "iptables chains deleted")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete iptables chains", e)
+            AppLogger.e(TAG, "Failed to delete iptables chains", e)
             val error = errorHandler.handleError(e, "delete iptables chains")
             Result.failure(error)
         }
@@ -166,8 +168,9 @@ class IptablesFirewallBackend(
         networkType: NetworkType,
         screenOn: Boolean
     ): Result<Unit> = mutex.withLock {
+        val startTime = System.currentTimeMillis()
         return try {
-            Log.d(TAG, "Applying rules: ${rules.size} total, network=$networkType, screenOn=$screenOn")
+            AppLogger.d(TAG, "🔥 [TIMING] IptablesBackend.applyRules START: ${rules.size} rules, network=$networkType, screenOn=$screenOn")
 
             // Note: No need to check isActive() here - service will only call this when active
 
@@ -206,7 +209,25 @@ class IptablesFirewallBackend(
                         }
                     }
 
-                Log.d(TAG, "Block All mode: found ${allPackages.size} packages with network permissions")
+                AppLogger.d(TAG, "Block All mode: found ${allPackages.size} packages with network permissions")
+
+                // Get critical package protection setting once (outside the loop)
+                val allowCritical = prefs.getBoolean(
+                    Constants.Settings.KEY_ALLOW_CRITICAL_FIREWALL,
+                    Constants.Settings.DEFAULT_ALLOW_CRITICAL_FIREWALL
+                )
+
+                // Pre-compute UIDs that contain critical packages (for UID-level exemption checks)
+                // This is needed because we block by UID, not by package - so if ANY package
+                // in a UID is critical with no rule, the entire UID should be allowed
+                val uidsWithCritical = if (allowCritical) {
+                    allPackages
+                        .filter { Constants.Firewall.isSystemCritical(it.packageName) || hasVpnService(it.packageName) }
+                        .map { it.uid }
+                        .toSet()
+                } else {
+                    emptySet()
+                }
 
                 for (appInfo in allPackages) {
                     val uid = appInfo.uid
@@ -230,12 +251,25 @@ class IptablesFirewallBackend(
                                 else -> false
                             }
                         }
-                        Log.d(TAG, "  $packageName (UID $uid): has rule, shouldBlock=$blockDecision")
+                        AppLogger.d(TAG, "  $packageName (UID $uid): has rule, shouldBlock=$blockDecision")
                         blockDecision
                     } else {
-                        // No rule - apply default policy (block all)
-                        Log.d(TAG, "  $packageName (UID $uid): no rule, blocking by default")
-                        true
+                        // No rule - check if this UID contains ANY critical package with allowCritical enabled
+                        // When allowCritical is ON and no explicit rule exists, default to ALLOW for system stability
+                        // IMPORTANT: Check at UID level because we block by UID, not by package
+                        if (allowCritical && uidsWithCritical.contains(uid)) {
+                            val isSelfCritical = Constants.Firewall.isSystemCritical(packageName) || hasVpnService(packageName)
+                            if (isSelfCritical) {
+                                AppLogger.d(TAG, "  $packageName (UID $uid): no rule, critical package → allowing")
+                            } else {
+                                AppLogger.d(TAG, "  $packageName (UID $uid): no rule, shares UID with critical package → allowing")
+                            }
+                            false
+                        } else {
+                            // Normal non-critical package/UID - apply default policy (block all)
+                            AppLogger.d(TAG, "  $packageName (UID $uid): no rule, blocking by default")
+                            true
+                        }
                     }
 
                     if (shouldBlock) {
@@ -278,20 +312,36 @@ class IptablesFirewallBackend(
             val uidsToAdd = uidsToBlock - blockedUids
             val uidsToRemove = blockedUids - uidsToBlock
 
-            Log.d(TAG, "Rule diff: add=${uidsToAdd.size}, remove=${uidsToRemove.size}, keep=${blockedUids.intersect(uidsToBlock).size}")
+            AppLogger.d(TAG, "🔥 [TIMING] Rule diff calculated: +${System.currentTimeMillis() - startTime}ms")
+            AppLogger.d(TAG, "🔥 [TIMING] Rule diff: add=${uidsToAdd.size} UIDs, remove=${uidsToRemove.size} UIDs, keep=${blockedUids.intersect(uidsToBlock).size} UIDs")
+
+            if (uidsToAdd.isNotEmpty()) {
+                AppLogger.d(TAG, "🔥 [TIMING] UIDs to ADD (block): $uidsToAdd")
+            }
+            if (uidsToRemove.isNotEmpty()) {
+                AppLogger.d(TAG, "🔥 [TIMING] UIDs to REMOVE (unblock): $uidsToRemove")
+            }
 
             // Remove rules that are no longer needed
+            val unblockStartTime = System.currentTimeMillis()
             for (uid in uidsToRemove) {
                 unblockApp(uid).getOrElse { error ->
-                    Log.w(TAG, "Failed to unblock UID $uid: ${error.message}")
+                    AppLogger.w(TAG, "Failed to unblock UID $uid: ${error.message}")
                 }
+            }
+            if (uidsToRemove.isNotEmpty()) {
+                AppLogger.d(TAG, "🔥 [TIMING] Unblock ${uidsToRemove.size} UIDs took ${System.currentTimeMillis() - unblockStartTime}ms")
             }
 
             // Add new rules
+            val blockStartTime = System.currentTimeMillis()
             for (uid in uidsToAdd) {
                 blockApp(uid).getOrElse { error ->
-                    Log.w(TAG, "Failed to block UID $uid: ${error.message}")
+                    AppLogger.w(TAG, "Failed to block UID $uid: ${error.message}")
                 }
+            }
+            if (uidsToAdd.isNotEmpty()) {
+                AppLogger.d(TAG, "🔥 [TIMING] Block ${uidsToAdd.size} UIDs took ${System.currentTimeMillis() - blockStartTime}ms")
             }
 
             // =============================================================================================
@@ -321,26 +371,27 @@ class IptablesFirewallBackend(
             val uidsToAddLan = uidsToBlockLan - blockedLanUids
             val uidsToRemoveLan = blockedLanUids - uidsToBlockLan
 
-            Log.d(TAG, "LAN blocking diff: add=${uidsToAddLan.size}, remove=${uidsToRemoveLan.size}, keep=${blockedLanUids.intersect(uidsToBlockLan).size}")
+            AppLogger.d(TAG, "LAN blocking diff: add=${uidsToAddLan.size}, remove=${uidsToRemoveLan.size}, keep=${blockedLanUids.intersect(uidsToBlockLan).size}")
 
             // Remove LAN rules that are no longer needed
             for (uid in uidsToRemoveLan) {
                 unblockAppLan(uid).getOrElse { error ->
-                    Log.w(TAG, "Failed to unblock LAN for UID $uid: ${error.message}")
+                    AppLogger.w(TAG, "Failed to unblock LAN for UID $uid: ${error.message}")
                 }
             }
 
             // Add new LAN rules
             for (uid in uidsToAddLan) {
                 blockAppLan(uid).getOrElse { error ->
-                    Log.w(TAG, "Failed to block LAN for UID $uid: ${error.message}")
+                    AppLogger.w(TAG, "Failed to block LAN for UID $uid: ${error.message}")
                 }
             }
 
-            Log.d(TAG, "Rules applied: ${blockedUids.size} apps blocked (Internet), ${blockedLanUids.size} apps blocked (LAN)")
+            AppLogger.d(TAG, "🔥 [TIMING] IptablesBackend.applyRules COMPLETE: total=${System.currentTimeMillis() - startTime}ms")
+            AppLogger.d(TAG, "🔥 [TIMING] Final state: ${blockedUids.size} apps blocked (Internet), ${blockedLanUids.size} apps blocked (LAN)")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to apply rules", e)
+            AppLogger.e(TAG, "Failed to apply rules", e)
             val error = errorHandler.handleError(e, "apply iptables rules")
             Result.failure(error)
         }
@@ -372,7 +423,7 @@ class IptablesFirewallBackend(
 
                 // If service is not actually running, clear the SharedPreferences flags
                 if (!isServiceActuallyRunning) {
-                    Log.w(TAG, "SharedPreferences says privileged service is running, but service is not actually running. Clearing flags.")
+                    AppLogger.w(TAG, "SharedPreferences says privileged service is running, but service is not actually running. Clearing flags.")
                     prefs.edit()
                         .putBoolean(Constants.Settings.KEY_PRIVILEGED_SERVICE_RUNNING, false)
                         .remove(Constants.Settings.KEY_PRIVILEGED_BACKEND_TYPE)
@@ -386,7 +437,7 @@ class IptablesFirewallBackend(
             // Fallback: if we can't check running services, trust SharedPreferences
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to check if iptables firewall is active", e)
+            AppLogger.e(TAG, "Failed to check if iptables firewall is active", e)
             false
         }
     }
@@ -430,8 +481,16 @@ class IptablesFirewallBackend(
             }
 
             Result.success(Unit)
+        } catch (e: java.util.concurrent.CancellationException) {
+            // Re-throw cancellation exceptions to allow coroutine cancellation to propagate
+            AppLogger.d(TAG, "checkAvailability cancelled")
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Re-throw cancellation exceptions to allow coroutine cancellation to propagate
+            AppLogger.d(TAG, "checkAvailability cancelled")
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to check iptables availability", e)
+            AppLogger.e(TAG, "Failed to check iptables availability", e)
             val error = errorHandler.handleError(e, "check iptables availability")
             Result.failure(error)
         }
@@ -455,10 +514,10 @@ class IptablesFirewallBackend(
             // Link chain to OUTPUT
             executeCommand("$IP6TABLES -C OUTPUT -j $CHAIN_OUTPUT 2>/dev/null || $IP6TABLES -I OUTPUT -j $CHAIN_OUTPUT")
 
-            Log.d(TAG, "Custom chains created successfully")
+            AppLogger.d(TAG, "Custom chains created successfully")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create custom chains", e)
+            AppLogger.e(TAG, "Failed to create custom chains", e)
             val error = errorHandler.handleError(e, "create iptables chains")
             Result.failure(error)
         }
@@ -479,10 +538,10 @@ class IptablesFirewallBackend(
             executeCommand("$IP6TABLES -F $CHAIN_OUTPUT 2>/dev/null || true")
             executeCommand("$IP6TABLES -X $CHAIN_OUTPUT 2>/dev/null || true")
 
-            Log.d(TAG, "Custom chains deleted successfully")
+            AppLogger.d(TAG, "Custom chains deleted successfully")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete custom chains", e)
+            AppLogger.e(TAG, "Failed to delete custom chains", e)
             val error = errorHandler.handleError(e, "delete iptables chains")
             Result.failure(error)
         }
@@ -491,33 +550,37 @@ class IptablesFirewallBackend(
     /**
      * Block an app by UID.
      * Only blocks OUTPUT since owner module only works for locally generated packets.
+     *
+     * CRITICAL: This runs in NonCancellable context to prevent iptables commands from being
+     * interrupted mid-execution when the parent coroutine is cancelled (e.g., by debouncing).
+     * An interrupted iptables command could leave the firewall in an inconsistent state.
      */
-    private suspend fun blockApp(uid: Int): Result<Unit> {
-        return try {
-            Log.d(TAG, "=== Blocking UID $uid ===")
+    private suspend fun blockApp(uid: Int): Result<Unit> = withContext(NonCancellable) {
+        return@withContext try {
+            AppLogger.d(TAG, "=== Blocking UID $uid ===")
 
             // IPv4: Block OUTPUT for this UID
             val ipv4Command = "$IPTABLES -A $CHAIN_OUTPUT -m owner --uid-owner $uid -j DROP"
-            Log.d(TAG, "Executing IPv4 command: $ipv4Command")
+            AppLogger.d(TAG, "Executing IPv4 command: $ipv4Command")
             val (ipv4ExitCode, ipv4Output) = executeCommand(ipv4Command)
-            Log.d(TAG, "IPv4 result: exitCode=$ipv4ExitCode, output='$ipv4Output'")
+            AppLogger.d(TAG, "IPv4 result: exitCode=$ipv4ExitCode, output='$ipv4Output'")
 
             // IPv6: Block OUTPUT for this UID
             val ipv6Command = "$IP6TABLES -A $CHAIN_OUTPUT -m owner --uid-owner $uid -j DROP"
-            Log.d(TAG, "Executing IPv6 command: $ipv6Command")
+            AppLogger.d(TAG, "Executing IPv6 command: $ipv6Command")
             val (ipv6ExitCode, ipv6Output) = executeCommand(ipv6Command)
-            Log.d(TAG, "IPv6 result: exitCode=$ipv6ExitCode, output='$ipv6Output'")
+            AppLogger.d(TAG, "IPv6 result: exitCode=$ipv6ExitCode, output='$ipv6Output'")
 
             if (ipv4ExitCode == 0 && ipv6ExitCode == 0) {
                 blockedUids.add(uid)
-                Log.d(TAG, "✅ Successfully blocked UID $uid (IPv4 and IPv6)")
+                AppLogger.d(TAG, "✅ Successfully blocked UID $uid (IPv4 and IPv6)")
             } else {
-                Log.e(TAG, "❌ Failed to block UID $uid - IPv4 exitCode=$ipv4ExitCode, IPv6 exitCode=$ipv6ExitCode")
-                return Result.failure(Exception("Failed to block UID $uid"))
+                AppLogger.e(TAG, "❌ Failed to block UID $uid - IPv4 exitCode=$ipv4ExitCode, IPv6 exitCode=$ipv6ExitCode")
+                return@withContext Result.failure(Exception("Failed to block UID $uid"))
             }
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to block UID $uid", e)
+            AppLogger.e(TAG, "Failed to block UID $uid", e)
             val error = errorHandler.handleError(e, "block app UID $uid")
             Result.failure(error)
         }
@@ -526,21 +589,23 @@ class IptablesFirewallBackend(
     /**
      * Block LAN access for an app by UID.
      * Uses destination IP filtering to block private IP ranges.
+     *
+     * CRITICAL: Runs in NonCancellable context to prevent interruption.
      */
-    private suspend fun blockAppLan(uid: Int): Result<Unit> {
-        return try {
-            Log.d(TAG, "=== Blocking LAN for UID $uid ===")
+    private suspend fun blockAppLan(uid: Int): Result<Unit> = withContext(NonCancellable) {
+        return@withContext try {
+            AppLogger.d(TAG, "=== Blocking LAN for UID $uid ===")
 
             // IPv4: Block private IP ranges
             val ipv4Ranges = listOf("192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12")
             for (range in ipv4Ranges) {
                 val command = "$IPTABLES -A $CHAIN_OUTPUT -m owner --uid-owner $uid -d $range -j DROP"
-                Log.d(TAG, "Executing IPv4 LAN command: $command")
+                AppLogger.d(TAG, "Executing IPv4 LAN command: $command")
                 val (exitCode, output) = executeCommand(command)
-                Log.d(TAG, "IPv4 LAN result: exitCode=$exitCode, output='$output'")
+                AppLogger.d(TAG, "IPv4 LAN result: exitCode=$exitCode, output='$output'")
                 if (exitCode != 0) {
-                    Log.e(TAG, "❌ Failed to block LAN IPv4 range $range for UID $uid")
-                    return Result.failure(Exception("Failed to block LAN IPv4 for UID $uid"))
+                    AppLogger.e(TAG, "❌ Failed to block LAN IPv4 range $range for UID $uid")
+                    return@withContext Result.failure(Exception("Failed to block LAN IPv4 for UID $uid"))
                 }
             }
 
@@ -548,20 +613,20 @@ class IptablesFirewallBackend(
             val ipv6Ranges = listOf("fc00::/7", "fe80::/10")
             for (range in ipv6Ranges) {
                 val command = "$IP6TABLES -A $CHAIN_OUTPUT -m owner --uid-owner $uid -d $range -j DROP"
-                Log.d(TAG, "Executing IPv6 LAN command: $command")
+                AppLogger.d(TAG, "Executing IPv6 LAN command: $command")
                 val (exitCode, output) = executeCommand(command)
-                Log.d(TAG, "IPv6 LAN result: exitCode=$exitCode, output='$output'")
+                AppLogger.d(TAG, "IPv6 LAN result: exitCode=$exitCode, output='$output'")
                 if (exitCode != 0) {
-                    Log.e(TAG, "❌ Failed to block LAN IPv6 range $range for UID $uid")
-                    return Result.failure(Exception("Failed to block LAN IPv6 for UID $uid"))
+                    AppLogger.e(TAG, "❌ Failed to block LAN IPv6 range $range for UID $uid")
+                    return@withContext Result.failure(Exception("Failed to block LAN IPv6 for UID $uid"))
                 }
             }
 
             blockedLanUids.add(uid)
-            Log.d(TAG, "✅ Successfully blocked LAN for UID $uid (IPv4 and IPv6)")
+            AppLogger.d(TAG, "✅ Successfully blocked LAN for UID $uid (IPv4 and IPv6)")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to block LAN for UID $uid", e)
+            AppLogger.e(TAG, "Failed to block LAN for UID $uid", e)
             val error = errorHandler.handleError(e, "block LAN for app UID $uid")
             Result.failure(error)
         }
@@ -569,9 +634,11 @@ class IptablesFirewallBackend(
 
     /**
      * Unblock an app by UID.
+     *
+     * CRITICAL: Runs in NonCancellable context to prevent interruption.
      */
-    private suspend fun unblockApp(uid: Int): Result<Unit> {
-        return try {
+    private suspend fun unblockApp(uid: Int): Result<Unit> = withContext(NonCancellable) {
+        return@withContext try {
             // IPv4: Remove DROP rule for this UID
             executeCommand("$IPTABLES -D $CHAIN_OUTPUT -m owner --uid-owner $uid -j DROP 2>/dev/null || true")
 
@@ -579,10 +646,10 @@ class IptablesFirewallBackend(
             executeCommand("$IP6TABLES -D $CHAIN_OUTPUT -m owner --uid-owner $uid -j DROP 2>/dev/null || true")
 
             blockedUids.remove(uid)
-            Log.d(TAG, "Unblocked UID $uid")
+            AppLogger.d(TAG, "Unblocked UID $uid")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to unblock UID $uid", e)
+            AppLogger.e(TAG, "Failed to unblock UID $uid", e)
             val error = errorHandler.handleError(e, "unblock app UID $uid")
             Result.failure(error)
         }
@@ -590,9 +657,11 @@ class IptablesFirewallBackend(
 
     /**
      * Unblock LAN access for an app by UID.
+     *
+     * CRITICAL: Runs in NonCancellable context to prevent interruption.
      */
-    private suspend fun unblockAppLan(uid: Int): Result<Unit> {
-        return try {
+    private suspend fun unblockAppLan(uid: Int): Result<Unit> = withContext(NonCancellable) {
+        return@withContext try {
             // IPv4: Remove DROP rules for private IP ranges
             val ipv4Ranges = listOf("192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12")
             for (range in ipv4Ranges) {
@@ -606,10 +675,10 @@ class IptablesFirewallBackend(
             }
 
             blockedLanUids.remove(uid)
-            Log.d(TAG, "Unblocked LAN for UID $uid")
+            AppLogger.d(TAG, "Unblocked LAN for UID $uid")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to unblock LAN for UID $uid", e)
+            AppLogger.e(TAG, "Failed to unblock LAN for UID $uid", e)
             val error = errorHandler.handleError(e, "unblock LAN for app UID $uid")
             Result.failure(error)
         }
@@ -617,19 +686,21 @@ class IptablesFirewallBackend(
 
     /**
      * Clear all firewall rules.
+     *
+     * CRITICAL: Runs in NonCancellable context to prevent interruption.
      */
-    private suspend fun clearAllRules(): Result<Unit> {
-        return try {
+    private suspend fun clearAllRules(): Result<Unit> = withContext(NonCancellable) {
+        return@withContext try {
             // Flush custom chains (removes all rules)
             executeCommand("$IPTABLES -F $CHAIN_OUTPUT 2>/dev/null || true")
             executeCommand("$IP6TABLES -F $CHAIN_OUTPUT 2>/dev/null || true")
 
             blockedUids.clear()
             blockedLanUids.clear()
-            Log.d(TAG, "All rules cleared")
+            AppLogger.d(TAG, "All rules cleared")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to clear rules", e)
+            AppLogger.e(TAG, "Failed to clear rules", e)
             val error = errorHandler.handleError(e, "clear iptables rules")
             Result.failure(error)
         }

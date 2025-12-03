@@ -3,12 +3,6 @@ package io.github.dorumrr.de1984.utils
 object Constants {
 
     object UI {
-        // Bottom Navigation (actually used in MainActivity.kt)
-        const val BOTTOM_NAV_ICON_SIZE_ENLARGED = 27.5f
-        const val BOTTOM_NAV_PADDING_TOP = 12
-        const val BOTTOM_NAV_PADDING_BOTTOM = 3
-        const val BOTTOM_NAV_TEXT_TRANSLATION_Y = -2
-
         // Dropdown behavior
         const val DROPDOWN_DISMISSAL_DELAY_MS = 200L
 
@@ -101,12 +95,14 @@ object Constants {
         const val KEY_PRIVILEGED_SERVICE_RUNNING = "privileged_service_running"  // Tracks if privileged firewall service is running
         const val KEY_PRIVILEGED_BACKEND_TYPE = "privileged_backend_type"  // Stores which privileged backend is active (iptables/connectivity_manager/network_policy_manager)
         const val KEY_NEW_APP_NOTIFICATIONS = "new_app_notifications"
+        const val KEY_BOOT_PROTECTION = "boot_protection"
         const val KEY_FIREWALL_MODE = "firewall_mode"
         const val KEY_ALLOW_CRITICAL_UNINSTALL = "allow_critical_package_uninstall"
         const val KEY_ALLOW_CRITICAL_FIREWALL = "allow_critical_package_firewall"
         const val KEY_SHOW_FIREWALL_START_PROMPT = "show_firewall_start_prompt"
         const val KEY_USE_DYNAMIC_COLORS = "use_dynamic_colors"
         const val KEY_APP_LANGUAGE = "app_language"
+        const val KEY_CONFIRM_RULE_CHANGES = "confirm_rule_changes"
 
         const val POLICY_BLOCK_ALL = "block_all"
         const val POLICY_ALLOW_ALL = "allow_all"
@@ -117,6 +113,7 @@ object Constants {
         const val LANGUAGE_PORTUGUESE = "pt"
         const val LANGUAGE_CHINESE = "zh"
         const val LANGUAGE_ITALIAN = "it"
+        const val LANGUAGE_FRENCH = "fr"
 
         const val MODE_AUTO = "auto"
         const val MODE_VPN = "vpn"
@@ -126,13 +123,21 @@ object Constants {
         const val DEFAULT_FIREWALL_POLICY = POLICY_ALLOW_ALL
         const val DEFAULT_FIREWALL_ENABLED = false
         const val DEFAULT_NEW_APP_NOTIFICATIONS = true
+        const val DEFAULT_BOOT_PROTECTION = false
         const val DEFAULT_FIREWALL_MODE = MODE_AUTO
         const val DEFAULT_ALLOW_CRITICAL_UNINSTALL = false
         const val DEFAULT_ALLOW_CRITICAL_FIREWALL = false
         const val DEFAULT_SHOW_FIREWALL_START_PROMPT = true
         const val DEFAULT_USE_DYNAMIC_COLORS = false
         const val DEFAULT_APP_LANGUAGE = LANGUAGE_SYSTEM_DEFAULT
+        const val DEFAULT_CONFIRM_RULE_CHANGES = true
 
+    }
+
+    object BootProtection {
+        const val BOOT_SCRIPT_PATH = "/data/adb/post-fs-data.d/de1984_boot_protection.sh"
+        const val MAGISK_POST_FS_DIR = "/data/adb/post-fs-data.d"
+        const val BOOT_SCRIPT_PERMISSIONS = "755"
     }
 
     object CaptivePortal {
@@ -184,6 +189,11 @@ object Constants {
     }
 
     object RootAccess {
+        // Command used to verify root is still active on an existing shell
+        // Running this on a cached shell does NOT trigger Magisk toast
+        const val ROOT_VERIFICATION_COMMAND = "id"
+        const val ROOT_VERIFICATION_SUCCESS_MARKER = "uid=0"
+
         const val STATUS_GRANTED = "Root Access: Granted"
         const val STATUS_DENIED = "Root Access: Denied"
         const val STATUS_NOT_AVAILABLE = "Root Access: Not Available"
@@ -298,6 +308,9 @@ object Constants {
 
             // Captive portal detection (optional but recommended)
             "com.android.captiveportallogin",     // Captive portal login (hotel/airport WiFi)
+
+            // Shizuku (required for wireless ADB mode - blocking it breaks the service)
+            "moe.shizuku.privileged.api",         // Shizuku app (provides ADB/root-level access to other apps)
         )
 
         /**
@@ -459,11 +472,24 @@ object Constants {
         const val PERMISSION_DESCRIPTION = "Create VPN connection for firewall fallback"
     }
 
+    object BackendFailure {
+        const val NOTIFICATION_ID = 1006
+        const val CHANNEL_ID = "backend_failure_channel"
+        const val CHANNEL_NAME = "Backend Failure"
+    }
+
     object BootFailure {
         // Notification Channel
         const val CHANNEL_ID = "boot_failure_channel"
         const val CHANNEL_NAME = "Boot Failure"
         const val NOTIFICATION_ID = 1005
+    }
+
+    object VpnConflict {
+        // Notification Channel - shared with other firewall alerts
+        const val CHANNEL_ID = "firewall_alerts_channel"
+        const val CHANNEL_NAME = "Firewall Alerts"
+        const val NOTIFICATION_ID = 1007
     }
 
 }

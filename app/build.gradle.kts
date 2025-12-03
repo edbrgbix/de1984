@@ -33,11 +33,11 @@ android {
         minSdk = 26
         targetSdk = 34
 
-        versionCode = 23
-        versionName = "2.4.4"
+        versionCode = 20
+        versionName = "2.5.0"
 
         // Specify supported languages (reduces APK size by excluding unused translations)
-        resourceConfigurations += listOf("en", "ro", "pt", "zh", "it")
+        resourceConfigurations += listOf("en", "ro", "pt", "zh", "it", "fr")
 
         vectorDrawables {
             useSupportLibrary = true

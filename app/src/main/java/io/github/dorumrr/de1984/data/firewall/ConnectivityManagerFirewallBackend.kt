@@ -1,10 +1,10 @@
 package io.github.dorumrr.de1984.data.firewall
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import io.github.dorumrr.de1984.data.common.ErrorHandler
 import io.github.dorumrr.de1984.data.common.ShizukuManager
 import io.github.dorumrr.de1984.data.service.PrivilegedFirewallService
@@ -13,8 +13,10 @@ import io.github.dorumrr.de1984.domain.firewall.FirewallBackendType
 import io.github.dorumrr.de1984.domain.model.FirewallRule
 import io.github.dorumrr.de1984.domain.model.NetworkType
 import io.github.dorumrr.de1984.utils.Constants
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Firewall backend using Android's ConnectivityManager firewall chain API.
@@ -65,8 +67,8 @@ class ConnectivityManagerFirewallBackend(
      */
     override suspend fun start(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "=== ConnectivityManagerFirewallBackend.start() ===")
-            Log.d(TAG, "Starting PrivilegedFirewallService with ConnectivityManager backend")
+            AppLogger.d(TAG, "=== ConnectivityManagerFirewallBackend.start() ===")
+            AppLogger.d(TAG, "Starting PrivilegedFirewallService with ConnectivityManager backend")
 
             // Start the privileged firewall service
             val intent = Intent(context, PrivilegedFirewallService::class.java).apply {
@@ -75,10 +77,10 @@ class ConnectivityManagerFirewallBackend(
             }
             context.startService(intent)
 
-            Log.d(TAG, "✅ ConnectivityManager firewall service started")
+            AppLogger.d(TAG, "✅ ConnectivityManager firewall service started")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start ConnectivityManager firewall", e)
+            AppLogger.e(TAG, "Failed to start ConnectivityManager firewall", e)
             Result.failure(errorHandler.handleError(e, "start ConnectivityManager firewall"))
         }
     }
@@ -88,20 +90,20 @@ class ConnectivityManagerFirewallBackend(
      */
     suspend fun startInternal(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "startInternal: Enabling firewall chain")
+            AppLogger.d(TAG, "startInternal: Enabling firewall chain")
 
             // Enable the firewall chain using shell command
             val (exitCode, output) = shizukuManager.executeShellCommand("cmd connectivity set-chain3-enabled true")
             if (exitCode != 0) {
                 val error = "Failed to enable firewall chain: $output"
-                Log.e(TAG, error)
+                AppLogger.e(TAG, error)
                 return Result.failure(Exception(error))
             }
 
-            Log.d(TAG, "✅ Firewall chain enabled (FIREWALL_CHAIN_OEM_DENY_3)")
+            AppLogger.d(TAG, "✅ Firewall chain enabled (FIREWALL_CHAIN_OEM_DENY_3)")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to enable firewall chain", e)
+            AppLogger.e(TAG, "Failed to enable firewall chain", e)
             Result.failure(errorHandler.handleError(e, "enable ConnectivityManager firewall chain"))
         }
     }
@@ -112,8 +114,8 @@ class ConnectivityManagerFirewallBackend(
      */
     override suspend fun stop(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "Stopping ConnectivityManager firewall backend")
-            Log.d(TAG, "Stopping PrivilegedFirewallService")
+            AppLogger.d(TAG, "Stopping ConnectivityManager firewall backend")
+            AppLogger.d(TAG, "Stopping PrivilegedFirewallService")
 
             // Stop the privileged firewall service
             val intent = Intent(context, PrivilegedFirewallService::class.java).apply {
@@ -121,10 +123,10 @@ class ConnectivityManagerFirewallBackend(
             }
             context.startService(intent)
 
-            Log.d(TAG, "ConnectivityManager firewall service stopped successfully")
+            AppLogger.d(TAG, "ConnectivityManager firewall service stopped successfully")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stop ConnectivityManager firewall", e)
+            AppLogger.e(TAG, "Failed to stop ConnectivityManager firewall", e)
             Result.failure(errorHandler.handleError(e, "stop ConnectivityManager firewall"))
         }
     }
@@ -134,35 +136,44 @@ class ConnectivityManagerFirewallBackend(
      */
     suspend fun stopInternal(): Result<Unit> = mutex.withLock {
         return try {
-            Log.d(TAG, "stopInternal: Disabling firewall chain")
+            AppLogger.d(TAG, "stopInternal: Disabling firewall chain")
 
             // Disable the firewall chain using shell command
             val (exitCode, output) = shizukuManager.executeShellCommand("cmd connectivity set-chain3-enabled false")
             if (exitCode != 0) {
-                Log.w(TAG, "Failed to disable firewall chain: $output")
+                AppLogger.w(TAG, "Failed to disable firewall chain: $output")
                 // Don't fail on stop - just log the warning
             }
 
             // Clear applied policies cache when stopping firewall
             appliedPolicies.clear()
-            Log.d(TAG, "Cleared applied policies cache")
+            AppLogger.d(TAG, "Cleared applied policies cache")
 
-            Log.d(TAG, "Firewall chain disabled")
+            AppLogger.d(TAG, "Firewall chain disabled")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to disable firewall chain", e)
+            AppLogger.e(TAG, "Failed to disable firewall chain", e)
             Result.failure(errorHandler.handleError(e, "disable ConnectivityManager firewall chain"))
         }
     }
 
+    /**
+     * Apply firewall rules using ConnectivityManager shell commands.
+     *
+     * CRITICAL: This runs in NonCancellable context to prevent shell commands from being
+     * interrupted mid-execution when the parent coroutine is cancelled (e.g., by debouncing).
+     * Interrupted commands could leave the firewall in an inconsistent state where some
+     * apps are blocked and others aren't.
+     */
     override suspend fun applyRules(
         rules: List<FirewallRule>,
         networkType: NetworkType,
         screenOn: Boolean
-    ): Result<Unit> = mutex.withLock {
-        return try {
-            Log.d(TAG, "=== ConnectivityManagerFirewallBackend.applyRules() ===")
-            Log.d(TAG, "Rules count: ${rules.size}, networkType: $networkType, screenOn: $screenOn")
+    ): Result<Unit> = withContext(NonCancellable) {
+        mutex.withLock {
+            return@withContext try {
+                AppLogger.d(TAG, "=== ConnectivityManagerFirewallBackend.applyRules() ===")
+            AppLogger.d(TAG, "Rules count: ${rules.size}, networkType: $networkType, screenOn: $screenOn")
 
             // Get default policy from SharedPreferences
             val prefs = context.getSharedPreferences(Constants.Settings.PREFS_NAME, Context.MODE_PRIVATE)
@@ -172,7 +183,7 @@ class ConnectivityManagerFirewallBackend(
             ) ?: Constants.Settings.DEFAULT_FIREWALL_POLICY
             val isBlockAllDefault = defaultPolicy == Constants.Settings.POLICY_BLOCK_ALL
 
-            Log.d(TAG, "Default policy: $defaultPolicy (isBlockAllDefault=$isBlockAllDefault)")
+            AppLogger.d(TAG, "Default policy: $defaultPolicy (isBlockAllDefault=$isBlockAllDefault)")
 
             var appliedCount = 0
             var errorCount = 0
@@ -198,21 +209,33 @@ class ConnectivityManagerFirewallBackend(
                     }
                 }
 
-            Log.d(TAG, "Found ${allPackages.size} packages with network permissions")
+            AppLogger.d(TAG, "Found ${allPackages.size} packages with network permissions")
 
             // Calculate desired policies for all packages
             val desiredPolicies = mutableMapOf<String, Boolean>()  // packageName -> shouldBlock
 
+            // Get critical package protection setting once (outside the loop)
+            val allowCritical = prefs.getBoolean(
+                Constants.Settings.KEY_ALLOW_CRITICAL_FIREWALL,
+                Constants.Settings.DEFAULT_ALLOW_CRITICAL_FIREWALL
+            )
+
+            // Pre-compute UIDs that contain critical packages (for UID-level exemption checks)
+            // Even though this backend operates per-package, Android's network permissions are UID-based
+            // So if ANY package in a UID is critical with no rule, all packages in that UID should be allowed
+            val uidsWithCritical = if (allowCritical) {
+                allPackages
+                    .filter { Constants.Firewall.isSystemCritical(it.packageName) || hasVpnService(it.packageName) }
+                    .map { it.uid }
+                    .toSet()
+            } else {
+                emptySet()
+            }
+
             // First pass: Calculate what the policy should be for each package
             allPackages.forEach { appInfo ->
                 val packageName = appInfo.packageName
-
-                // Check if critical package protection is disabled
-                val prefs = context.getSharedPreferences(Constants.Settings.PREFS_NAME, Context.MODE_PRIVATE)
-                val allowCritical = prefs.getBoolean(
-                    Constants.Settings.KEY_ALLOW_CRITICAL_FIREWALL,
-                    Constants.Settings.DEFAULT_ALLOW_CRITICAL_FIREWALL
-                )
+                val uid = appInfo.uid
 
                 // Never block system-critical packages - always allow (unless setting is enabled)
                 if (Constants.Firewall.isSystemCritical(packageName) && !allowCritical) {
@@ -241,7 +264,17 @@ class ConnectivityManagerFirewallBackend(
                     // Per FIREWALL.md lines 220-230:
                     // - Block All mode: Apps without rules are blocked on all networks
                     // - Allow All mode: Apps without rules are allowed on all networks
-                    isBlockAllDefault
+                    // EXCEPT: When allowCritical is ON and UID contains critical package, default to ALLOW for stability
+                    // IMPORTANT: Check at UID level because Android's network permissions are UID-based
+                    if (isBlockAllDefault && allowCritical && uidsWithCritical.contains(uid)) {
+                        val isSelfCritical = Constants.Firewall.isSystemCritical(packageName) || hasVpnService(packageName)
+                        if (!isSelfCritical) {
+                            AppLogger.d(TAG, "  $packageName (UID $uid): no rule, shares UID with critical package → allowing")
+                        }
+                        false  // Allow UIDs with critical packages without rules for system stability
+                    } else {
+                        isBlockAllDefault
+                    }
                 }
 
                 desiredPolicies[packageName] = shouldBlock
@@ -270,23 +303,24 @@ class ConnectivityManagerFirewallBackend(
                         appliedPolicies[packageName] = shouldBlock  // Track applied policy
                         val rule = rulesByPackage[packageName]
                         val ruleStatus = if (rule != null) "has rule" else "no rule (default policy)"
-                        Log.d(TAG, "Applied policy for $packageName ($ruleStatus): " +
+                        AppLogger.d(TAG, "Applied policy for $packageName ($ruleStatus): " +
                                 "policy=${if (shouldBlock) "BLOCK (all networks)" else "ALLOW"}")
                     } else {
                         errorCount++
-                        Log.e(TAG, "Failed to apply policy for $packageName: $output")
+                        AppLogger.e(TAG, "Failed to apply policy for $packageName: $output")
                     }
                 } catch (e: Exception) {
                     errorCount++
-                    Log.e(TAG, "Failed to apply policy for $packageName", e)
+                    AppLogger.e(TAG, "Failed to apply policy for $packageName", e)
                 }
             }
 
-            Log.d(TAG, "✅ Applied $appliedCount policies, skipped $skippedCount unchanged, $errorCount errors")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to apply rules", e)
-            Result.failure(errorHandler.handleError(e, "apply connectivity manager rules"))
+                AppLogger.d(TAG, "✅ Applied $appliedCount policies, skipped $skippedCount unchanged, $errorCount errors")
+                Result.success(Unit)
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "Failed to apply rules", e)
+                Result.failure(errorHandler.handleError(e, "apply connectivity manager rules"))
+            }
         }
     }
 
@@ -316,7 +350,7 @@ class ConnectivityManagerFirewallBackend(
 
                 // If service is not actually running, clear the SharedPreferences flags
                 if (!isServiceActuallyRunning) {
-                    Log.w(TAG, "SharedPreferences says privileged service is running, but service is not actually running. Clearing flags.")
+                    AppLogger.w(TAG, "SharedPreferences says privileged service is running, but service is not actually running. Clearing flags.")
                     prefs.edit()
                         .putBoolean(Constants.Settings.KEY_PRIVILEGED_SERVICE_RUNNING, false)
                         .remove(Constants.Settings.KEY_PRIVILEGED_BACKEND_TYPE)
@@ -330,7 +364,7 @@ class ConnectivityManagerFirewallBackend(
             // Fallback: if we can't check running services, trust SharedPreferences
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to check if ConnectivityManager firewall is active", e)
+            AppLogger.e(TAG, "Failed to check if ConnectivityManager firewall is active", e)
             false
         }
     }
@@ -362,7 +396,7 @@ class ConnectivityManagerFirewallBackend(
 
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "ConnectivityManager firewall not available", e)
+            AppLogger.e(TAG, "ConnectivityManager firewall not available", e)
             Result.failure(errorHandler.handleError(e, "check ConnectivityManager availability"))
         }
     }
@@ -375,7 +409,7 @@ class ConnectivityManagerFirewallBackend(
      */
     fun clearAppliedPoliciesCache() {
         appliedPolicies.clear()
-        Log.d(TAG, "Cleared applied policies cache (forced)")
+        AppLogger.d(TAG, "Cleared applied policies cache (forced)")
     }
 
     /**

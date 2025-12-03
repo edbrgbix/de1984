@@ -1,5 +1,6 @@
 package io.github.dorumrr.de1984.data.service
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,7 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.dorumrr.de1984.De1984Application
 import io.github.dorumrr.de1984.R
@@ -71,8 +71,9 @@ class PrivilegedFirewallService : Service() {
     private val rulesChangedReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
             if (intent?.action == "io.github.dorumrr.de1984.FIREWALL_RULES_CHANGED") {
+                AppLogger.d(TAG, "🔥 [TIMING] Broadcast RECEIVED: timestamp=${System.currentTimeMillis()}")
                 if (isServiceActive) {
-                    scheduleRuleApplication()
+                    scheduleRuleApplication("broadcast")
                 }
             }
         }
@@ -109,14 +110,14 @@ class PrivilegedFirewallService : Service() {
             registerReceiver(rulesChangedReceiver, filter)
         }
 
-        Log.d(TAG, "Service created")
+        AppLogger.d(TAG, "Service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: action=${intent?.action}, wasExplicitlyStopped=$wasExplicitlyStopped")
+        AppLogger.d(TAG, "onStartCommand: action=${intent?.action}, wasExplicitlyStopped=$wasExplicitlyStopped")
 
         if (wasExplicitlyStopped && intent?.action != ACTION_START) {
-            Log.d(TAG, "Service was explicitly stopped and no START action - stopping self")
+            AppLogger.d(TAG, "Service was explicitly stopped and no START action - stopping self")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -129,25 +130,25 @@ class PrivilegedFirewallService : Service() {
                     "CONNECTIVITY_MANAGER" -> FirewallBackendType.CONNECTIVITY_MANAGER
                     "NETWORK_POLICY_MANAGER" -> FirewallBackendType.NETWORK_POLICY_MANAGER
                     else -> {
-                        Log.e(TAG, "Invalid backend type: $backendTypeStr")
+                        AppLogger.e(TAG, "Invalid backend type: $backendTypeStr")
                         stopSelf()
                         return START_NOT_STICKY
                     }
                 }
 
-                Log.d(TAG, "ACTION_START received - starting privileged firewall with backend: $backendType")
+                AppLogger.d(TAG, "ACTION_START received - starting privileged firewall with backend: $backendType")
                 wasExplicitlyStopped = false
                 startFirewall(backendType)
                 return START_STICKY
             }
             ACTION_STOP -> {
-                Log.d(TAG, "ACTION_STOP received - stopping privileged firewall")
+                AppLogger.d(TAG, "ACTION_STOP received - stopping privileged firewall")
                 wasExplicitlyStopped = true
                 stopFirewall()
                 return START_NOT_STICKY
             }
             else -> {
-                Log.w(TAG, "Unknown action or null intent - stopping self")
+                AppLogger.w(TAG, "Unknown action or null intent - stopping self")
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -163,11 +164,11 @@ class PrivilegedFirewallService : Service() {
         try {
             unregisterReceiver(rulesChangedReceiver)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to unregister broadcast receiver", e)
+            AppLogger.w(TAG, "Failed to unregister broadcast receiver", e)
         }
 
         super.onDestroy()
-        Log.d(TAG, "Service destroyed")
+        AppLogger.d(TAG, "Service destroyed")
     }
 
     private fun createNotificationChannel() {
@@ -210,7 +211,7 @@ class PrivilegedFirewallService : Service() {
     }
 
     private fun startFirewall(backendType: FirewallBackendType) {
-        Log.d(TAG, "startFirewall() called with backend: $backendType")
+        AppLogger.d(TAG, "startFirewall() called with backend: $backendType")
 
         serviceScope.launch {
             try {
@@ -228,7 +229,7 @@ class PrivilegedFirewallService : Service() {
                         )
                         // Call internal start method
                         b.startInternal().getOrElse { error ->
-                            Log.e(TAG, "Failed to start iptables backend: ${error.message}")
+                            AppLogger.e(TAG, "Failed to start iptables backend: ${error.message}")
                             stopSelf()
                             return@launch
                         }
@@ -242,7 +243,7 @@ class PrivilegedFirewallService : Service() {
                         )
                         // Call internal start method
                         b.startInternal().getOrElse { error ->
-                            Log.e(TAG, "Failed to start ConnectivityManager backend: ${error.message}")
+                            AppLogger.e(TAG, "Failed to start ConnectivityManager backend: ${error.message}")
                             stopSelf()
                             return@launch
                         }
@@ -256,14 +257,14 @@ class PrivilegedFirewallService : Service() {
                         )
                         // Call internal start method
                         b.startInternal().getOrElse { error ->
-                            Log.e(TAG, "Failed to start NetworkPolicyManager backend: ${error.message}")
+                            AppLogger.e(TAG, "Failed to start NetworkPolicyManager backend: ${error.message}")
                             stopSelf()
                             return@launch
                         }
                         b
                     }
                     else -> {
-                        Log.e(TAG, "Unsupported backend type: $backendType")
+                        AppLogger.e(TAG, "Unsupported backend type: $backendType")
                         stopSelf()
                         return@launch
                     }
@@ -279,29 +280,29 @@ class PrivilegedFirewallService : Service() {
                     .putBoolean(Constants.Settings.KEY_PRIVILEGED_SERVICE_RUNNING, true)
                     .putString(Constants.Settings.KEY_PRIVILEGED_BACKEND_TYPE, backendType.name)
                     .apply()
-                Log.d(TAG, "Updated SharedPreferences: PRIVILEGED_SERVICE_RUNNING=true, BACKEND_TYPE=$backendType")
+                AppLogger.d(TAG, "Updated SharedPreferences: PRIVILEGED_SERVICE_RUNNING=true, BACKEND_TYPE=$backendType")
 
                 // Start foreground service
-                Log.d(TAG, "Starting foreground service with notification")
+                AppLogger.d(TAG, "Starting foreground service with notification")
                 startForeground(NOTIFICATION_ID, createNotification())
 
                 // Apply initial rules
-                scheduleRuleApplication()
+                scheduleRuleApplication("initial")
 
                 // Start monitoring
                 startMonitoring()
                 startBackendHealthMonitoring()
 
-                Log.d(TAG, "Privileged firewall started successfully with backend: $backendType")
+                AppLogger.d(TAG, "Privileged firewall started successfully with backend: $backendType")
             } catch (e: Exception) {
-                Log.e(TAG, "Error in startFirewall", e)
+                AppLogger.e(TAG, "Error in startFirewall", e)
                 stopSelf()
             }
         }
     }
 
     private fun stopFirewall() {
-        Log.d(TAG, "stopFirewall() called")
+        AppLogger.d(TAG, "stopFirewall() called")
 
         isServiceActive = false
 
@@ -327,21 +328,21 @@ class PrivilegedFirewallService : Service() {
                 when (backendType) {
                     FirewallBackendType.IPTABLES -> {
                         (backend as? IptablesFirewallBackend)?.stopInternal()?.getOrElse { error ->
-                            Log.w(TAG, "Failed to stop iptables backend: ${error.message}")
+                            AppLogger.w(TAG, "Failed to stop iptables backend: ${error.message}")
                         }
                     }
                     FirewallBackendType.CONNECTIVITY_MANAGER -> {
                         (backend as? ConnectivityManagerFirewallBackend)?.stopInternal()?.getOrElse { error ->
-                            Log.w(TAG, "Failed to stop ConnectivityManager backend: ${error.message}")
+                            AppLogger.w(TAG, "Failed to stop ConnectivityManager backend: ${error.message}")
                         }
                     }
                     FirewallBackendType.NETWORK_POLICY_MANAGER -> {
                         (backend as? NetworkPolicyManagerFirewallBackend)?.stopInternal()?.getOrElse { error ->
-                            Log.w(TAG, "Failed to stop NetworkPolicyManager backend: ${error.message}")
+                            AppLogger.w(TAG, "Failed to stop NetworkPolicyManager backend: ${error.message}")
                         }
                     }
                     else -> {
-                        Log.w(TAG, "Unknown backend type: $backendType")
+                        AppLogger.w(TAG, "Unknown backend type: $backendType")
                     }
                 }
             }
@@ -355,7 +356,7 @@ class PrivilegedFirewallService : Service() {
                 .putBoolean(Constants.Settings.KEY_PRIVILEGED_SERVICE_RUNNING, false)
                 .remove(Constants.Settings.KEY_PRIVILEGED_BACKEND_TYPE)
                 .apply()
-            Log.d(TAG, "Updated SharedPreferences: PRIVILEGED_SERVICE_RUNNING=false")
+            AppLogger.d(TAG, "Updated SharedPreferences: PRIVILEGED_SERVICE_RUNNING=false")
 
             // Stop foreground and remove notification
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -364,7 +365,7 @@ class PrivilegedFirewallService : Service() {
     }
 
     private fun startMonitoring() {
-        Log.d(TAG, "Starting network/screen state monitoring")
+        AppLogger.d(TAG, "Starting network/screen state monitoring")
 
         // Monitor network type and screen state changes
         monitoringJob = serviceScope.launch {
@@ -378,8 +379,8 @@ class PrivilegedFirewallService : Service() {
                 isScreenOn = screenOn
 
                 if (isServiceActive) {
-                    Log.d(TAG, "State changed: network=$networkType, screen=$screenOn - scheduling rule application")
-                    scheduleRuleApplication()
+                    AppLogger.d(TAG, "State changed: network=$networkType, screen=$screenOn - scheduling rule application")
+                    scheduleRuleApplication("state-change")
                 }
             }
         }
@@ -388,8 +389,8 @@ class PrivilegedFirewallService : Service() {
         serviceScope.launch {
             firewallRepository.getAllRules().collect { _ ->
                 if (isServiceActive) {
-                    Log.d(TAG, "Rules changed - scheduling rule application")
-                    scheduleRuleApplication()
+                    AppLogger.d(TAG, "🔥 [TIMING] Flow EMITTED: timestamp=${System.currentTimeMillis()}")
+                    scheduleRuleApplication("flow")
                 }
             }
         }
@@ -400,13 +401,7 @@ class PrivilegedFirewallService : Service() {
         consecutiveSuccessfulHealthChecks = 0
         currentHealthCheckInterval = Constants.HealthCheck.BACKEND_HEALTH_CHECK_INTERVAL_INITIAL_MS
 
-        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.d(TAG, "║  🔍 STARTING ADAPTIVE SERVICE HEALTH MONITORING              ║")
-        Log.d(TAG, "║  Initial interval: ${currentHealthCheckInterval}ms (30 seconds)")
-        Log.d(TAG, "║  Stable interval: ${Constants.HealthCheck.BACKEND_HEALTH_CHECK_INTERVAL_STABLE_MS}ms (5 minutes)")
-        Log.d(TAG, "║  Threshold: ${Constants.HealthCheck.BACKEND_HEALTH_CHECK_STABLE_THRESHOLD} successful checks")
-        Log.d(TAG, "║  Purpose: Detect permission loss within service              ║")
-        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
+        AppLogger.d(TAG, "🔍 STARTING ADAPTIVE SERVICE HEALTH MONITORING | Initial interval: ${currentHealthCheckInterval}ms (30 seconds) | Stable interval: ${Constants.HealthCheck.BACKEND_HEALTH_CHECK_INTERVAL_STABLE_MS}ms (5 minutes) | Threshold: ${Constants.HealthCheck.BACKEND_HEALTH_CHECK_STABLE_THRESHOLD} successful checks | Purpose: Detect permission loss within service")
 
         healthMonitoringJob = serviceScope.launch {
             while (isServiceActive) {
@@ -416,14 +411,13 @@ class PrivilegedFirewallService : Service() {
                 val backendType = currentBackendType
 
                 if (backend == null || backendType == null) {
-                    Log.w(TAG, "⚠️  SERVICE HEALTH CHECK: backend is null, stopping monitoring")
+                    AppLogger.w(TAG, "⚠️  SERVICE HEALTH CHECK: backend is null, stopping monitoring")
                     break
                 }
 
                 try {
-                    Log.d(TAG, "")
-                    Log.d(TAG, "=== SERVICE HEALTH CHECK: $backendType ===")
-                    Log.d(TAG, "Checking if backend still has required permissions... (interval: ${currentHealthCheckInterval}ms, consecutive successes: $consecutiveSuccessfulHealthChecks)")
+                    AppLogger.d(TAG, "=== SERVICE HEALTH CHECK: $backendType ===")
+                    AppLogger.d(TAG, "Checking if backend still has required permissions... (interval: ${currentHealthCheckInterval}ms, consecutive successes: $consecutiveSuccessfulHealthChecks)")
 
                     // For root-based backends (iptables) explicitly re-check root status so
                     // we can detect Magisk revocation while the app is in background.
@@ -431,12 +425,12 @@ class PrivilegedFirewallService : Service() {
                         try {
                             val app = application as De1984Application
                             val deps = app.dependencies
-                            Log.d(TAG, "Health check: forcing root status re-check for iptables backend")
+                            AppLogger.d(TAG, "Health check: forcing root status re-check for iptables backend")
                             // CRITICAL: Must await the result so the StateFlow is updated before checkAvailability()
                             deps.rootManager.forceRecheckRootStatus()
-                            Log.d(TAG, "Health check: root status re-check complete, new status: ${deps.rootManager.rootStatus.value}")
+                            AppLogger.d(TAG, "Health check: root status re-check complete, new status: ${deps.rootManager.rootStatus.value}")
                         } catch (e: Exception) {
-                            Log.w(TAG, "Health check: failed to force root status re-check: ${e.message}")
+                            AppLogger.w(TAG, "Health check: failed to force root status re-check: ${e.message}")
                         }
                     }
 
@@ -444,14 +438,7 @@ class PrivilegedFirewallService : Service() {
                     val availabilityResult = backend.checkAvailability()
 
                     if (availabilityResult.isFailure) {
-                        Log.e(TAG, "")
-                        Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                        Log.e(TAG, "║  ❌ SERVICE: BACKEND AVAILABILITY CHECK FAILED               ║")
-                        Log.e(TAG, "║  Backend: $backendType")
-                        Log.e(TAG, "║  Reason: ${availabilityResult.exceptionOrNull()?.message}")
-                        Log.e(TAG, "║  Action: Stopping service to trigger FirewallManager fallback║")
-                        Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                        Log.e(TAG, "")
+                        AppLogger.e(TAG, "❌ SERVICE: BACKEND AVAILABILITY CHECK FAILED | Backend: $backendType | Reason: ${availabilityResult.exceptionOrNull()?.message} | Action: Stopping service to trigger FirewallManager fallback")
 
                         // Reset adaptive tracking on failure
                         consecutiveSuccessfulHealthChecks = 0
@@ -467,32 +454,18 @@ class PrivilegedFirewallService : Service() {
 
                     // Health check passed - increment success counter
                     consecutiveSuccessfulHealthChecks++
-                    Log.d(TAG, "✅ SERVICE: Health check passed - $backendType is healthy (consecutive successes: $consecutiveSuccessfulHealthChecks)")
-                    Log.d(TAG, "")
+                    AppLogger.d(TAG, "✅ SERVICE: Health check passed - $backendType is healthy (consecutive successes: $consecutiveSuccessfulHealthChecks)")
 
                     // Check if we should increase interval (backend is stable)
                     if (consecutiveSuccessfulHealthChecks >= Constants.HealthCheck.BACKEND_HEALTH_CHECK_STABLE_THRESHOLD &&
                         currentHealthCheckInterval == Constants.HealthCheck.BACKEND_HEALTH_CHECK_INTERVAL_INITIAL_MS) {
                         currentHealthCheckInterval = Constants.HealthCheck.BACKEND_HEALTH_CHECK_INTERVAL_STABLE_MS
-                        Log.d(TAG, "")
-                        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                        Log.d(TAG, "║  ⚡ SERVICE: BACKEND STABLE - INCREASING INTERVAL            ║")
-                        Log.d(TAG, "║  Backend: $backendType")
-                        Log.d(TAG, "║  New interval: ${currentHealthCheckInterval}ms (5 minutes)")
-                        Log.d(TAG, "║  Battery savings: ~90% reduction in wake-ups                 ║")
-                        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                        Log.d(TAG, "")
+                        AppLogger.d(TAG, "⚡ SERVICE: BACKEND STABLE - INCREASING INTERVAL | Backend: $backendType | New interval: ${currentHealthCheckInterval}ms (5 minutes) | Battery savings: ~90% reduction in wake-ups")
                     }
 
                 } catch (e: Exception) {
-                    Log.e(TAG, "")
-                    Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-                    Log.e(TAG, "║  ❌ SERVICE: HEALTH CHECK EXCEPTION                          ║")
-                    Log.e(TAG, "║  Backend: $backendType")
-                    Log.e(TAG, "║  Exception: ${e.message}")
-                    Log.e(TAG, "║  Action: Stopping service to trigger FirewallManager fallback║")
-                    Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
-                    Log.e(TAG, "", e)
+                    AppLogger.e(TAG, "❌ SERVICE: HEALTH CHECK EXCEPTION | Backend: $backendType | Exception: ${e.message} | Action: Stopping service to trigger FirewallManager fallback")
+                    AppLogger.e(TAG, "", e)
 
                     // Reset adaptive tracking on exception
                     consecutiveSuccessfulHealthChecks = 0
@@ -506,11 +479,7 @@ class PrivilegedFirewallService : Service() {
     }
 
     private fun handleBackendFailure(backendType: FirewallBackendType) {
-        Log.e(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.e(TAG, "║  ⚠️  BACKEND FAILURE DETECTED IN SERVICE                     ║")
-        Log.e(TAG, "║  Backend: $backendType")
-        Log.e(TAG, "║  Action: Notifying FirewallManager and stopping service       ║")
-        Log.e(TAG, "╚════════════════════════════════════════════════════════════════╝")
+        AppLogger.e(TAG, "⚠️  BACKEND FAILURE DETECTED IN SERVICE | Backend: $backendType | Action: Notifying FirewallManager and stopping service")
 
         // Show notification to user
         showFailureNotification(backendType)
@@ -520,12 +489,12 @@ class PrivilegedFirewallService : Service() {
         try {
             val app = application as De1984Application
             val deps = app.dependencies
-            Log.e(TAG, "Notifying FirewallManager of backend failure...")
+            AppLogger.e(TAG, "Notifying FirewallManager of backend failure...")
             serviceScope.launch {
                 deps.firewallManager.handleBackendFailureFromService(backendType)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to notify FirewallManager of backend failure: ${e.message}")
+            AppLogger.e(TAG, "Failed to notify FirewallManager of backend failure: ${e.message}")
             // Continue with service stop - health check will detect it eventually
         }
 
@@ -534,10 +503,10 @@ class PrivilegedFirewallService : Service() {
         // The FirewallManager will start VPN backend instead
         wasExplicitlyStopped = true
 
-        Log.e(TAG, "Stopping service now...")
+        AppLogger.e(TAG, "Stopping service now...")
         stopFirewall()
 
-        Log.e(TAG, "Service stopped. FirewallManager should handle VPN fallback immediately.")
+        AppLogger.e(TAG, "Service stopped. FirewallManager should handle VPN fallback immediately.")
     }
 
     private fun showFailureNotification(backendType: FirewallBackendType) {
@@ -575,35 +544,46 @@ class PrivilegedFirewallService : Service() {
         notificationManager.notify(NOTIFICATION_ID + 1, notification)
     }
 
-    private fun scheduleRuleApplication() {
+    private var ruleApplicationStartTime: Long = 0L
+
+    private fun scheduleRuleApplication(source: String) {
+        val previousJob = ruleApplicationJob
         ruleApplicationJob?.cancel()
+        ruleApplicationStartTime = System.currentTimeMillis()
+
+        AppLogger.d(TAG, "🔥 [TIMING] scheduleRuleApplication($source): previousJobActive=${previousJob?.isActive}, timestamp=$ruleApplicationStartTime")
 
         ruleApplicationJob = serviceScope.launch {
+            AppLogger.d(TAG, "🔥 [TIMING] Debounce START (300ms): source=$source")
             delay(300)  // Debounce
+            AppLogger.d(TAG, "🔥 [TIMING] Debounce END: +${System.currentTimeMillis() - ruleApplicationStartTime}ms")
 
             if (!isServiceActive) {
-                Log.d(TAG, "Service not active, skipping rule application")
+                AppLogger.d(TAG, "Service not active, skipping rule application")
                 return@launch
             }
 
             val backend = currentBackend
             if (backend == null) {
-                Log.w(TAG, "Backend is null, cannot apply rules")
+                AppLogger.w(TAG, "Backend is null, cannot apply rules")
                 return@launch
             }
 
             try {
-                Log.d(TAG, "Applying rules: network=$currentNetworkType, screen=$isScreenOn")
+                AppLogger.d(TAG, "🔥 [TIMING] Fetching rules from DB: +${System.currentTimeMillis() - ruleApplicationStartTime}ms")
                 val rules = firewallRepository.getAllRules().first()
+                AppLogger.d(TAG, "🔥 [TIMING] Rules fetched (${rules.size} rules): +${System.currentTimeMillis() - ruleApplicationStartTime}ms")
 
+                AppLogger.d(TAG, "🔥 [TIMING] Applying rules to backend: network=$currentNetworkType, screen=$isScreenOn")
+                val applyStartTime = System.currentTimeMillis()
                 backend.applyRules(rules, currentNetworkType, isScreenOn).getOrElse { error ->
-                    Log.e(TAG, "Failed to apply rules: ${error.message}")
+                    AppLogger.e(TAG, "🔥 [TIMING] Backend applyRules FAILED: +${System.currentTimeMillis() - ruleApplicationStartTime}ms, error=${error.message}")
                     return@launch
                 }
 
-                Log.d(TAG, "Rules applied successfully")
+                AppLogger.d(TAG, "🔥 [TIMING] Backend applyRules SUCCESS: backend took ${System.currentTimeMillis() - applyStartTime}ms, total +${System.currentTimeMillis() - ruleApplicationStartTime}ms")
             } catch (e: Exception) {
-                Log.e(TAG, "Exception while applying rules", e)
+                AppLogger.e(TAG, "🔥 [TIMING] Exception while applying rules: +${System.currentTimeMillis() - ruleApplicationStartTime}ms", e)
             }
         }
     }

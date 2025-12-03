@@ -16,7 +16,8 @@ import kotlinx.coroutines.launch
 
 class PermissionSetupViewModel constructor(
     private val context: Context,
-    private val permissionManager: PermissionManager
+    private val permissionManager: PermissionManager,
+    private val firewallManager: io.github.dorumrr.de1984.data.firewall.FirewallManager? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PermissionSetupUiState())
@@ -31,14 +32,24 @@ class PermissionSetupViewModel constructor(
             val basicPermissions = getBasicPermissionInfo()
             val advancedPermissions = getAdvancedPermissionInfo()
             val batteryOptimizationInfo = getBatteryOptimizationInfo()
-            val vpnPermissionInfo = getVpnPermissionInfo()
+
+            // Get current backend type to determine if VPN permission is needed
+            val currentBackendType = firewallManager?.getActiveBackendType()
+            val isUsingPrivilegedBackend = currentBackendType != null &&
+                currentBackendType != io.github.dorumrr.de1984.domain.firewall.FirewallBackendType.VPN
+
+            // For VPN permission info display, check actual permission status (without safety guards)
+            // This is safe because we're only reading the status, not taking over the VPN
+            val vpnPermissionInfo = getVpnPermissionInfo(isUsingPrivilegedBackend)
 
             _uiState.value = _uiState.value.copy(
                 hasBasicPermissions = permissionManager.hasBasicPermissions(),
                 hasEnhancedPermissions = true,
                 hasAdvancedPermissions = permissionManager.hasRootAccess() || permissionManager.hasShizukuAccess() || permissionManager.hasSystemPermissions(),
                 hasBatteryOptimizationExemption = permissionManager.isBatteryOptimizationDisabled(),
-                hasVpnPermission = permissionManager.hasVpnPermission(),
+                // When using privileged backend, VPN permission is not required
+                hasVpnPermission = isUsingPrivilegedBackend || permissionManager.hasVpnPermission(null, null),
+                isUsingPrivilegedBackend = isUsingPrivilegedBackend,
                 basicPermissions = basicPermissions,
                 enhancedPermissions = emptyList(),
                 advancedPermissions = advancedPermissions,
@@ -123,8 +134,10 @@ class PermissionSetupViewModel constructor(
         )
     }
 
-    private fun getVpnPermissionInfo(): List<PermissionInfo> {
-        val hasVpn = permissionManager.hasVpnPermission()
+    private fun getVpnPermissionInfo(isUsingPrivilegedBackend: Boolean): List<PermissionInfo> {
+        // When using privileged backend, VPN permission is not required - show as granted/not needed
+        // Otherwise, check actual VPN permission status (without safety guards for display only)
+        val hasVpn = isUsingPrivilegedBackend || permissionManager.hasVpnPermission(null, null)
         return listOf(
             PermissionInfo(
                 permission = "android.permission.BIND_VPN_SERVICE",
@@ -137,12 +150,13 @@ class PermissionSetupViewModel constructor(
 
     class Factory(
         private val context: Context,
-        private val permissionManager: PermissionManager
+        private val permissionManager: PermissionManager,
+        private val firewallManager: io.github.dorumrr.de1984.data.firewall.FirewallManager? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(PermissionSetupViewModel::class.java)) {
-                return PermissionSetupViewModel(context, permissionManager) as T
+                return PermissionSetupViewModel(context, permissionManager, firewallManager) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }
@@ -156,6 +170,7 @@ data class PermissionSetupUiState(
     val hasAdvancedPermissions: Boolean = false,
     val hasBatteryOptimizationExemption: Boolean = false,
     val hasVpnPermission: Boolean = false,
+    val isUsingPrivilegedBackend: Boolean = false,
     val basicPermissions: List<PermissionInfo> = emptyList(),
     val enhancedPermissions: List<PermissionInfo> = emptyList(),
     val advancedPermissions: List<PermissionInfo> = emptyList(),

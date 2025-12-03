@@ -38,12 +38,16 @@ import io.github.dorumrr.de1984.data.common.RootStatus
 import io.github.dorumrr.de1984.data.common.ShizukuStatus
 import io.github.dorumrr.de1984.databinding.FragmentSettingsBinding
 import io.github.dorumrr.de1984.domain.model.CaptivePortalMode
+import io.github.dorumrr.de1984.domain.model.UninstallBatchResult
 import io.github.dorumrr.de1984.domain.model.CaptivePortalPreset
 import io.github.dorumrr.de1984.databinding.PermissionTierSectionBinding
+import io.github.dorumrr.de1984.presentation.viewmodel.ImportUninstalledPreview
 import io.github.dorumrr.de1984.presentation.viewmodel.SettingsViewModel
 import io.github.dorumrr.de1984.ui.base.BaseFragment
 import io.github.dorumrr.de1984.ui.common.StandardDialog
+import io.github.dorumrr.de1984.ui.logs.LogsActivity
 import io.github.dorumrr.de1984.ui.permissions.PermissionSetupViewModel
+import io.github.dorumrr.de1984.utils.AppLogger
 import io.github.dorumrr.de1984.utils.Constants
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
@@ -55,7 +59,7 @@ import java.util.Locale
  * Settings Fragment using XML Views
  */
 class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
-
+    
     companion object {
         private const val TAG = "SettingsFragment"
     }
@@ -69,7 +73,10 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             app.dependencies.shizukuManager,
             app.dependencies.firewallManager,
             app.dependencies.firewallRepository,
-            app.dependencies.captivePortalManager
+            app.dependencies.captivePortalManager,
+            app.dependencies.bootProtectionManager,
+            app.dependencies.provideSmartPolicySwitchUseCase(),
+            app.dependencies.packageRepository
         )
     }
 
@@ -77,7 +84,8 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         val app = requireActivity().application as De1984Application
         PermissionSetupViewModel.Factory(
             context = requireContext(),
-            permissionManager = app.dependencies.permissionManager
+            permissionManager = app.dependencies.permissionManager,
+            firewallManager = app.dependencies.firewallManager
         )
     }
 
@@ -100,13 +108,38 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
     // Activity result launcher for VPN permission
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+    ) { _ ->
+        // Check if permission was granted by trying to prepare again
+        val prepareIntent = android.net.VpnService.prepare(requireContext())
+        if (prepareIntent == null) {
             // VPN permission granted
             permissionViewModel.refreshPermissions()
+            
+            // If we were waiting for permission for backend switch, complete it
+            if (viewModel.uiState.value.vpnPermissionRequired) {
+                viewModel.clearVpnPermissionRequired()
+                viewModel.onVpnPermissionGranted()
+            }
         } else {
-            // VPN permission denied - refresh anyway to update UI
+            // VPN permission denied
             permissionViewModel.refreshPermissions()
+            
+            // If we were trying to switch backends, revert
+            if (viewModel.uiState.value.vpnPermissionRequired) {
+                viewModel.clearVpnPermissionRequired()
+                android.widget.Toast.makeText(
+                    requireContext(),
+                    getString(io.github.dorumrr.de1984.R.string.vpn_permission_denied),
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                // Revert dropdown to AUTO mode
+                val allBackends = getAllBackends()
+                val autoIndex = allBackends.indexOfFirst { it.mode == io.github.dorumrr.de1984.domain.firewall.FirewallMode.AUTO }
+                if (autoIndex >= 0) {
+                    binding.backendSelectionDropdown.setText(allBackends[autoIndex].displayName, false)
+                }
+                viewModel.setFirewallMode(io.github.dorumrr.de1984.domain.firewall.FirewallMode.AUTO, forceEvenIfOtherVpnActive = true)
+            }
         }
     }
 
@@ -123,6 +156,22 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
     ) { uri ->
         uri?.let { showRestorePreview(it) }
     }
+
+    // Export uninstalled apps launcher - creates a new text file
+    private val exportUninstalledLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        uri?.let { viewModel.exportUninstalledApps(it) }
+    }
+
+    // Import uninstalled apps launcher - opens an existing text file
+    private val importUninstalledLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.importUninstalledApps(it) }
+    }
+
+    private var progressDialog: androidx.appcompat.app.AlertDialog? = null
 
     private var lastRootTestTime = 0L
 
@@ -141,7 +190,7 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        Log.d(TAG, "onViewCreated: Settings fragment view created")
+        AppLogger.d(TAG, "onViewCreated: Settings fragment view created")
 
         setupViews()
         observeUiState()
@@ -150,21 +199,21 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
 
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "onResume: Settings fragment resumed")
+        AppLogger.d(TAG, "onResume: Settings fragment resumed")
     }
 
     override fun onPause() {
         super.onPause()
-        Log.d(TAG, "onPause: Settings fragment paused")
+        AppLogger.d(TAG, "onPause: Settings fragment paused")
     }
 
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
-        Log.d(TAG, "onHiddenChanged: hidden=$hidden")
+        AppLogger.d(TAG, "onHiddenChanged: hidden=$hidden")
 
         // When fragment becomes visible, update UI with current state
         if (!hidden) {
-            Log.d(TAG, "onHiddenChanged: Fragment became visible, updating UI")
+            AppLogger.d(TAG, "onHiddenChanged: Fragment became visible, updating UI")
             updateUI(viewModel.uiState.value)
             // Refresh permission state to show current status (fixes UI not updating after granting permissions)
             permissionViewModel.refreshPermissions()
@@ -201,6 +250,12 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         // Language selection dropdown
         setupLanguageSelectionDropdown()
 
+        // App Logs menu item
+        binding.appLogsItem.setOnClickListener {
+            val intent = Intent(requireContext(), io.github.dorumrr.de1984.ui.logs.LogsActivity::class.java)
+            startActivity(intent)
+        }
+
         // Show app icons switch
         binding.showAppIconsSwitch.setOnCheckedChangeListener { _, isChecked ->
             viewModel.setShowAppIcons(isChecked)
@@ -222,6 +277,9 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             viewModel.setNewAppNotifications(isChecked)
         }
 
+        // Boot protection switch - listener is set in updateUI() to handle confirmation dialog
+        // (We need to show a warning dialog before enabling/disabling)
+
         // Backup rules button
         binding.backupRulesButton.setOnClickListener {
             val filename = "de1984-firewall-backup-${viewModel.getCurrentDate()}.json"
@@ -231,6 +289,17 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         // Restore rules button
         binding.restoreRulesButton.setOnClickListener {
             restoreLauncher.launch(arrayOf("application/json"))
+        }
+
+        // Export uninstalled apps button
+        binding.exportUninstalledAppsButton.setOnClickListener {
+            val filename = "de1984-uninstalled-apps-${viewModel.getCurrentDate()}.txt"
+            exportUninstalledLauncher.launch(filename)
+        }
+
+        // Import uninstalled apps button
+        binding.importUninstalledAppsButton.setOnClickListener {
+            importUninstalledLauncher.launch(arrayOf("text/plain", "text/*"))
         }
 
         // Captive Portal Controller
@@ -278,21 +347,61 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
                 viewModel.uiState.collect { state ->
                     // Only update UI if fragment is visible (not hidden)
                     if (!isHidden) {
-                        Log.d(TAG, "observeUiState: Fragment is visible, updating UI (requiresRestart=${state.requiresRestart})")
+                        AppLogger.d(TAG, "observeUiState: Fragment is visible, updating UI (requiresRestart=${state.requiresRestart})")
                         updateUI(state)
 
                         // Show restart dialog if needed (only when user toggles the switch)
                         if (state.requiresRestart) {
-                            Log.d(TAG, "observeUiState: Showing restart dialog")
+                            AppLogger.d(TAG, "observeUiState: Showing restart dialog")
                             showRestartDialog()
                             viewModel.clearRestartPrompt()
                         }
+
+                        // Show VPN conflict warning if user tries to switch to VPN while another VPN is active
+                        if (state.showVpnConflictWarning && state.pendingModeChange != null) {
+                            showVpnConflictWarning()
+                        }
+
+                        // Request VPN permission if needed for backend switch
+                        if (state.vpnPermissionRequired) {
+                            val prepareIntent = viewModel.checkVpnPermissionNeeded()
+                            if (prepareIntent != null) {
+                                vpnPermissionLauncher.launch(prepareIntent)
+                            } else {
+                                // Permission already granted, proceed
+                                viewModel.clearVpnPermissionRequired()
+                                viewModel.onVpnPermissionGranted()
+                            }
+                        }
                     } else {
-                        Log.d(TAG, "observeUiState: Fragment is hidden, skipping UI update")
+                        AppLogger.d(TAG, "observeUiState: Fragment is hidden, skipping UI update")
                     }
                 }
             }
         }
+    }
+
+    private fun showVpnConflictWarning() {
+        StandardDialog.showConfirmation(
+            context = requireContext(),
+            title = getString(io.github.dorumrr.de1984.R.string.dialog_vpn_conflict_title),
+            message = getString(io.github.dorumrr.de1984.R.string.dialog_vpn_conflict_message),
+            confirmButtonText = getString(io.github.dorumrr.de1984.R.string.dialog_vpn_conflict_confirm),
+            cancelButtonText = getString(io.github.dorumrr.de1984.R.string.dialog_cancel),
+            onConfirm = {
+                viewModel.confirmPendingModeChange()
+            },
+            onCancel = {
+                viewModel.cancelPendingModeChange()
+                // Revert dropdown to current mode
+                val currentMode = viewModel.uiState.value.firewallMode
+                val allBackends = getAllBackends()
+                val currentIndex = allBackends.indexOfFirst { it.mode == currentMode }
+                if (currentIndex >= 0) {
+                    binding.backendSelectionDropdown.setText(allBackends[currentIndex].displayName, false)
+                }
+            }
+        )
     }
 
     private fun updateUI(state: io.github.dorumrr.de1984.presentation.viewmodel.SettingsUiState) {
@@ -328,44 +437,44 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             binding.useDynamicColorsSwitch.setOnCheckedChangeListener(null)
         }
 
-        Log.d(TAG, "updateUI: Setting useDynamicColorsSwitch.isChecked = ${state.useDynamicColors}")
+        AppLogger.d(TAG, "updateUI: Setting useDynamicColorsSwitch.isChecked = ${state.useDynamicColors}")
         binding.useDynamicColorsSwitch.isChecked = state.useDynamicColors
 
         // Attach listener (only if not already attached, or re-attach after removing)
         binding.useDynamicColorsSwitch.setOnCheckedChangeListener { _, isChecked ->
-            Log.d(TAG, "updateUI: Dynamic colors switch toggled to $isChecked by user")
+            AppLogger.d(TAG, "updateUI: Dynamic colors switch toggled to $isChecked by user")
             viewModel.setUseDynamicColors(isChecked, showRestartDialog = true)
         }
         isDynamicColorsSwitchListenerAttached = true
 
         binding.allowCriticalUninstallSwitch.setOnCheckedChangeListener(null)
-        Log.d(TAG, "updateUI: Setting allowCriticalUninstallSwitch.isChecked = ${state.allowCriticalPackageUninstall}")
+        AppLogger.d(TAG, "updateUI: Setting allowCriticalUninstallSwitch.isChecked = ${state.allowCriticalPackageUninstall}")
         binding.allowCriticalUninstallSwitch.isChecked = state.allowCriticalPackageUninstall
         binding.allowCriticalUninstallSwitch.setOnCheckedChangeListener { _, isChecked ->
-            Log.d(TAG, "allowCriticalUninstallSwitch listener (from updateUI) triggered: isChecked=$isChecked")
+            AppLogger.d(TAG, "allowCriticalUninstallSwitch listener (from updateUI) triggered: isChecked=$isChecked")
             if (isChecked) {
-                Log.d(TAG, "Showing critical uninstall warning dialog (from updateUI)")
+                AppLogger.d(TAG, "Showing critical uninstall warning dialog (from updateUI)")
                 showCriticalUninstallWarning {
                     viewModel.setAllowCriticalPackageUninstall(true)
                 }
             } else {
-                Log.d(TAG, "Disabling critical package uninstall (from updateUI)")
+                AppLogger.d(TAG, "Disabling critical package uninstall (from updateUI)")
                 viewModel.setAllowCriticalPackageUninstall(false)
             }
         }
 
         binding.allowCriticalFirewallSwitch.setOnCheckedChangeListener(null)
-        Log.d(TAG, "updateUI: Setting allowCriticalFirewallSwitch.isChecked = ${state.allowCriticalPackageFirewall}")
+        AppLogger.d(TAG, "updateUI: Setting allowCriticalFirewallSwitch.isChecked = ${state.allowCriticalPackageFirewall}")
         binding.allowCriticalFirewallSwitch.isChecked = state.allowCriticalPackageFirewall
         binding.allowCriticalFirewallSwitch.setOnCheckedChangeListener { _, isChecked ->
-            Log.d(TAG, "allowCriticalFirewallSwitch listener (from updateUI) triggered: isChecked=$isChecked")
+            AppLogger.d(TAG, "allowCriticalFirewallSwitch listener (from updateUI) triggered: isChecked=$isChecked")
             if (isChecked) {
-                Log.d(TAG, "Showing critical firewall warning dialog (from updateUI)")
+                AppLogger.d(TAG, "Showing critical firewall warning dialog (from updateUI)")
                 showCriticalFirewallWarning {
                     viewModel.setAllowCriticalPackageFirewall(true)
                 }
             } else {
-                Log.d(TAG, "Disabling critical package firewall (from updateUI)")
+                AppLogger.d(TAG, "Disabling critical package firewall (from updateUI)")
                 viewModel.setAllowCriticalPackageFirewall(false)
             }
         }
@@ -376,10 +485,45 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             viewModel.setShowFirewallStartPrompt(isChecked)
         }
 
+        binding.confirmRuleChangesSwitch.setOnCheckedChangeListener(null)
+        binding.confirmRuleChangesSwitch.isChecked = state.confirmRuleChanges
+        binding.confirmRuleChangesSwitch.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.setConfirmRuleChanges(isChecked)
+        }
+
         binding.newAppNotificationsSwitch.setOnCheckedChangeListener(null)
         binding.newAppNotificationsSwitch.isChecked = state.newAppNotifications
         binding.newAppNotificationsSwitch.setOnCheckedChangeListener { _, isChecked ->
             viewModel.setNewAppNotifications(isChecked)
+        }
+
+        // Boot protection switch
+        binding.bootProtectionSwitch.setOnCheckedChangeListener(null)
+
+        // If boot protection is unavailable, force switch to OFF and disable it
+        if (!state.bootProtectionAvailable) {
+            binding.bootProtectionSwitch.isChecked = false
+            binding.bootProtectionSwitch.isEnabled = false
+            binding.bootProtectionDescription.text = getString(io.github.dorumrr.de1984.R.string.settings_boot_protection_unavailable)
+        } else {
+            binding.bootProtectionSwitch.isChecked = state.bootProtection
+            binding.bootProtectionSwitch.isEnabled = true
+            binding.bootProtectionDescription.text = getString(io.github.dorumrr.de1984.R.string.settings_boot_protection_description)
+        }
+
+        binding.bootProtectionSwitch.setOnCheckedChangeListener { _, isChecked ->
+            AppLogger.d(TAG, "bootProtectionSwitch listener triggered: isChecked=$isChecked")
+            if (isChecked) {
+                AppLogger.d(TAG, "Showing boot protection enable warning dialog")
+                showBootProtectionWarning(true) {
+                    viewModel.setBootProtection(true)
+                }
+            } else {
+                AppLogger.d(TAG, "Showing boot protection disable warning dialog")
+                showBootProtectionWarning(false) {
+                    viewModel.setBootProtection(false)
+                }
+            }
         }
 
         // Update backend selection dropdown
@@ -406,6 +550,24 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
                 context = requireContext(),
                 message = error
             )
+        }
+
+        // Handle import preview
+        state.importUninstalledPreview?.let { preview ->
+            if (preview.packagesNotFound.isEmpty()) {
+                // All packages found - show confirmation dialog
+                showImportPreviewDialog(preview)
+            } else {
+                // Some packages not found - show warning dialog
+                showImportWarningDialog(preview)
+            }
+        }
+
+        // Handle batch uninstall result
+        state.batchUninstallResult?.let { result ->
+            progressDialog?.dismiss()
+            showBatchUninstallResults(result)
+            viewModel.clearBatchUninstallResult()
         }
     }
 
@@ -437,8 +599,10 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         binding.backendSelectionDropdown.setOnItemClickListener { _, _, position, _ ->
             val selectedBackend = allBackends[position]
             if (selectedBackend.isAvailable) {
+                AppLogger.i(TAG, "👤 User selected firewall mode: ${selectedBackend.mode} (${selectedBackend.displayName})")
                 viewModel.setFirewallMode(selectedBackend.mode)
             } else {
+                AppLogger.d(TAG, "👤 User tried to select unavailable backend: ${selectedBackend.displayName}")
                 // Revert to current selection if unavailable backend was clicked
                 binding.backendSelectionDropdown.setText(allBackends[currentIndex].displayName, false)
 
@@ -466,7 +630,8 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             LanguageOption(Constants.Settings.LANGUAGE_ROMANIAN, getString(io.github.dorumrr.de1984.R.string.language_romanian)),
             LanguageOption(Constants.Settings.LANGUAGE_PORTUGUESE, getString(io.github.dorumrr.de1984.R.string.language_portuguese)),
             LanguageOption(Constants.Settings.LANGUAGE_CHINESE, getString(io.github.dorumrr.de1984.R.string.language_chinese)),
-            LanguageOption(Constants.Settings.LANGUAGE_ITALIAN, getString(io.github.dorumrr.de1984.R.string.language_italian))
+            LanguageOption(Constants.Settings.LANGUAGE_ITALIAN, getString(io.github.dorumrr.de1984.R.string.language_italian)),
+            LanguageOption(Constants.Settings.LANGUAGE_FRENCH, getString(io.github.dorumrr.de1984.R.string.language_french))
         ).let { list ->
             // Keep "System Default" first, sort the rest alphabetically by display name
             listOf(list.first()) + list.drop(1).sortedBy { it.displayName }
@@ -520,6 +685,7 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
                     Constants.Settings.LANGUAGE_PORTUGUESE -> androidx.core.os.LocaleListCompat.forLanguageTags("pt")
                     Constants.Settings.LANGUAGE_CHINESE -> androidx.core.os.LocaleListCompat.forLanguageTags("zh")
                     Constants.Settings.LANGUAGE_ITALIAN -> androidx.core.os.LocaleListCompat.forLanguageTags("it")
+                    Constants.Settings.LANGUAGE_FRENCH -> androidx.core.os.LocaleListCompat.forLanguageTags("fr")
                     else -> androidx.core.os.LocaleListCompat.getEmptyLocaleList()
                 }
                 androidx.appcompat.app.AppCompatDelegate.setApplicationLocales(localeList)
@@ -743,15 +909,27 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         )
 
         // Setup VPN Tier
+        // When using privileged backend (iptables/CM), VPN permission is not needed
+        val vpnStatus = when {
+            state.isUsingPrivilegedBackend -> getString(io.github.dorumrr.de1984.R.string.permission_status_not_required)
+            state.hasVpnPermission -> getString(io.github.dorumrr.de1984.R.string.permission_status_completed)
+            else -> getString(io.github.dorumrr.de1984.R.string.permission_status_required)
+        }
+        val vpnDescription = if (state.isUsingPrivilegedBackend) {
+            getString(io.github.dorumrr.de1984.R.string.permission_tier_vpn_desc_privileged)
+        } else {
+            getString(io.github.dorumrr.de1984.R.string.permission_tier_vpn_desc)
+        }
         setupPermissionTier(
             binding.permissionTierVpn,
             title = getString(io.github.dorumrr.de1984.R.string.permission_tier_vpn_title),
-            description = getString(io.github.dorumrr.de1984.R.string.permission_tier_vpn_desc),
-            status = if (state.hasVpnPermission) getString(io.github.dorumrr.de1984.R.string.permission_status_completed) else getString(io.github.dorumrr.de1984.R.string.permission_status_required),
-            isComplete = state.hasVpnPermission,
+            description = vpnDescription,
+            status = vpnStatus,
+            isComplete = state.hasVpnPermission || state.isUsingPrivilegedBackend,
             permissions = state.vpnPermissionInfo,
             setupButtonText = getString(io.github.dorumrr.de1984.R.string.permission_button_grant_vpn),
-            onSetupClick = if (!state.hasVpnPermission) {
+            // Don't show grant button when using privileged backend
+            onSetupClick = if (!state.hasVpnPermission && !state.isUsingPrivilegedBackend) {
                 { handleVpnPermissionRequest() }
             } else null
         )
@@ -1015,17 +1193,21 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
     }
 
     private fun handleVpnPermissionRequest() {
+        AppLogger.d(TAG, "handleVpnPermissionRequest() called")
         try {
             val prepareIntent = VpnService.prepare(requireContext())
+            AppLogger.d(TAG, "VpnService.prepare() returned: $prepareIntent")
             if (prepareIntent != null) {
                 // VPN permission not granted - request it
+                AppLogger.d(TAG, "Launching VPN permission request dialog")
                 vpnPermissionLauncher.launch(prepareIntent)
             } else {
                 // VPN permission already granted
+                AppLogger.d(TAG, "VPN permission already granted, refreshing permissions")
                 permissionViewModel.refreshPermissions()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to request VPN permission", e)
+            AppLogger.e(TAG, "Failed to request VPN permission", e)
             // Show error to user
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle(getString(R.string.dialog_vpn_permission_error_title))
@@ -1285,19 +1467,19 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
     }
 
     private fun showCriticalUninstallWarning(onConfirm: () -> Unit) {
-        Log.d(TAG, "showCriticalUninstallWarning: Displaying warning dialog")
+        AppLogger.d(TAG, "showCriticalUninstallWarning: Displaying warning dialog")
         StandardDialog.showConfirmation(
             context = requireContext(),
             title = getString(R.string.dialog_critical_uninstall_title),
             message = getString(R.string.dialog_critical_uninstall_message),
             confirmButtonText = getString(R.string.dialog_critical_uninstall_enable),
             onConfirm = {
-                Log.d(TAG, "showCriticalUninstallWarning: User confirmed")
+                AppLogger.d(TAG, "showCriticalUninstallWarning: User confirmed")
                 onConfirm()
             },
             cancelButtonText = getString(R.string.dialog_cancel),
             onCancel = {
-                Log.d(TAG, "showCriticalUninstallWarning: User cancelled, reverting switch")
+                AppLogger.d(TAG, "showCriticalUninstallWarning: User cancelled, reverting switch")
                 // Revert switch state
                 binding.allowCriticalUninstallSwitch.setOnCheckedChangeListener(null)
                 binding.allowCriticalUninstallSwitch.isChecked = false
@@ -1315,19 +1497,19 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
     }
 
     private fun showCriticalFirewallWarning(onConfirm: () -> Unit) {
-        Log.d(TAG, "showCriticalFirewallWarning: Displaying warning dialog")
+        AppLogger.d(TAG, "showCriticalFirewallWarning: Displaying warning dialog")
         StandardDialog.showConfirmation(
             context = requireContext(),
             title = getString(R.string.dialog_critical_firewall_title),
             message = getString(R.string.dialog_critical_firewall_message),
             confirmButtonText = getString(R.string.dialog_critical_firewall_enable),
             onConfirm = {
-                Log.d(TAG, "showCriticalFirewallWarning: User confirmed")
+                AppLogger.d(TAG, "showCriticalFirewallWarning: User confirmed")
                 onConfirm()
             },
             cancelButtonText = getString(R.string.dialog_cancel),
             onCancel = {
-                Log.d(TAG, "showCriticalFirewallWarning: User cancelled, reverting switch")
+                AppLogger.d(TAG, "showCriticalFirewallWarning: User cancelled, reverting switch")
                 // Revert switch state
                 binding.allowCriticalFirewallSwitch.setOnCheckedChangeListener(null)
                 binding.allowCriticalFirewallSwitch.isChecked = false
@@ -1344,6 +1526,51 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
         )
     }
 
+    private fun showBootProtectionWarning(enable: Boolean, onConfirm: () -> Unit) {
+        AppLogger.d(TAG, "showBootProtectionWarning: enable=$enable, displaying warning dialog")
+
+        val title = if (enable) {
+            getString(R.string.boot_protection_enable_warning_title)
+        } else {
+            getString(R.string.boot_protection_disable_warning_title)
+        }
+
+        val message = if (enable) {
+            getString(R.string.boot_protection_enable_warning_message)
+        } else {
+            getString(R.string.boot_protection_disable_warning_message)
+        }
+
+        StandardDialog.showConfirmation(
+            context = requireContext(),
+            title = title,
+            message = message,
+            confirmButtonText = getString(R.string.dialog_continue),
+            onConfirm = {
+                AppLogger.d(TAG, "showBootProtectionWarning: User confirmed")
+                onConfirm()
+            },
+            cancelButtonText = getString(R.string.dialog_cancel),
+            onCancel = {
+                AppLogger.d(TAG, "showBootProtectionWarning: User cancelled, reverting switch")
+                // Revert switch state
+                binding.bootProtectionSwitch.setOnCheckedChangeListener(null)
+                binding.bootProtectionSwitch.isChecked = !enable
+                binding.bootProtectionSwitch.setOnCheckedChangeListener { _, isChecked ->
+                    if (isChecked) {
+                        showBootProtectionWarning(true) {
+                            viewModel.setBootProtection(true)
+                        }
+                    } else {
+                        showBootProtectionWarning(false) {
+                            viewModel.setBootProtection(false)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     private fun showRestartDialog() {
         StandardDialog.showConfirmation(
             context = requireContext(),
@@ -1351,12 +1578,12 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             message = getString(R.string.dialog_restart_message),
             confirmButtonText = getString(R.string.dialog_restart_confirm),
             onConfirm = {
-                Log.d(TAG, "showRestartDialog: User confirmed restart")
+                AppLogger.d(TAG, "showRestartDialog: User confirmed restart")
                 restartApp()
             },
             cancelButtonText = getString(R.string.dialog_cancel),
             onCancel = {
-                Log.d(TAG, "showRestartDialog: User cancelled restart")
+                AppLogger.d(TAG, "showRestartDialog: User cancelled restart")
             }
         )
     }
@@ -1372,10 +1599,10 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
                 // Kill the current process to ensure a full restart
                 android.os.Process.killProcess(android.os.Process.myPid())
             } else {
-                Log.e(TAG, "Failed to get launch intent for restart")
+                AppLogger.e(TAG, "Failed to get launch intent for restart")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to restart app: ${e.message}")
+            AppLogger.e(TAG, "Failed to restart app: ${e.message}")
         }
     }
 
@@ -1532,6 +1759,135 @@ class SettingsFragmentViews : BaseFragment<FragmentSettingsBinding>() {
             errorText?.text = getString(R.string.settings_captive_portal_no_privileges)
             errorText?.visibility = View.VISIBLE
         }
+    }
+
+    // =============================================================================================
+    // Export/Import Uninstalled Apps Dialogs
+    // =============================================================================================
+
+    /**
+     * Show import preview dialog when all packages are found.
+     */
+    private fun showImportPreviewDialog(preview: ImportUninstalledPreview) {
+        val packageList = preview.packagesToUninstall.take(10).joinToString("\n") { pkg -> "• $pkg" }
+        val moreText = if (preview.packagesToUninstall.size > 10) {
+            "\n${getString(R.string.batch_uninstall_results_and_more, preview.packagesToUninstall.size - 10)}"
+        } else {
+            ""
+        }
+
+        StandardDialog.showConfirmation(
+            context = requireContext(),
+            title = getString(R.string.dialog_import_preview_title),
+            message = getString(
+                R.string.dialog_import_preview_message,
+                preview.packagesToUninstall.size,
+                packageList + moreText
+            ),
+            confirmButtonText = getString(R.string.dialog_import_confirm),
+            cancelButtonText = getString(R.string.dialog_cancel),
+            onConfirm = {
+                performBatchUninstall(preview.packagesToUninstall.size)
+                viewModel.confirmImportUninstall()
+            },
+            onCancel = {
+                viewModel.clearImportPreview()
+            }
+        )
+    }
+
+    /**
+     * Show import warning dialog when some packages are not found.
+     */
+    private fun showImportWarningDialog(preview: ImportUninstalledPreview) {
+        val foundList = preview.packagesToUninstall.take(10).joinToString("\n") { pkg -> "• $pkg" }
+        val foundMoreText = if (preview.packagesToUninstall.size > 10) {
+            "\n${getString(R.string.batch_uninstall_results_and_more, preview.packagesToUninstall.size - 10)}"
+        } else {
+            ""
+        }
+
+        val notFoundList = preview.packagesNotFound.take(10).joinToString("\n") { pkg -> "• $pkg" }
+        val notFoundMoreText = if (preview.packagesNotFound.size > 10) {
+            "\n${getString(R.string.batch_uninstall_results_and_more, preview.packagesNotFound.size - 10)}"
+        } else {
+            ""
+        }
+
+        StandardDialog.showConfirmation(
+            context = requireContext(),
+            title = getString(R.string.dialog_import_warning_title),
+            message = getString(
+                R.string.dialog_import_warning_message,
+                preview.packagesToUninstall.size,
+                preview.totalPackages,
+                foundList + foundMoreText,
+                notFoundList + notFoundMoreText
+            ),
+            confirmButtonText = getString(R.string.dialog_import_confirm),
+            cancelButtonText = getString(R.string.dialog_cancel),
+            onConfirm = {
+                performBatchUninstall(preview.packagesToUninstall.size)
+                viewModel.confirmImportUninstall()
+            },
+            onCancel = {
+                viewModel.clearImportPreview()
+            }
+        )
+    }
+
+    /**
+     * Show progress dialog during batch uninstall.
+     */
+    private fun performBatchUninstall(totalPackages: Int) {
+        progressDialog?.dismiss()
+
+        progressDialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+            .setTitle(getString(R.string.batch_uninstall_progress_title))
+            .setMessage(getString(R.string.batch_uninstall_progress_message, 0, totalPackages))
+            .setCancelable(false)
+            .create()
+
+        progressDialog?.show()
+    }
+
+    /**
+     * Show batch uninstall results dialog.
+     */
+    private fun showBatchUninstallResults(result: UninstallBatchResult) {
+        val message = buildString {
+            if (result.succeeded.isNotEmpty()) {
+                append(getString(R.string.batch_uninstall_results_success, result.succeeded.size))
+                append("\n")
+                result.succeeded.take(10).forEach { packageName ->
+                    append("• $packageName\n")
+                }
+                if (result.succeeded.size > 10) {
+                    append(getString(R.string.batch_uninstall_results_and_more, result.succeeded.size - 10) + "\n")
+                }
+            }
+
+            if (result.failed.isNotEmpty()) {
+                if (result.succeeded.isNotEmpty()) {
+                    append("\n")
+                }
+                append(getString(R.string.batch_uninstall_results_failed, result.failed.size))
+                append("\n")
+                result.failed.take(10).forEach { (packageName, error) ->
+                    append("• $packageName: $error\n")
+                }
+                if (result.failed.size > 10) {
+                    append(getString(R.string.batch_uninstall_results_and_more, result.failed.size - 10))
+                }
+            }
+        }
+
+        StandardDialog.show(
+            context = requireContext(),
+            title = getString(R.string.batch_uninstall_results_title),
+            message = message,
+            positiveButtonText = getString(R.string.dialog_ok)
+        )
     }
 }
 

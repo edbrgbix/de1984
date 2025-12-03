@@ -1,7 +1,7 @@
 package io.github.dorumrr.de1984.ui.packages
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -68,7 +68,10 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
             app.dependencies.shizukuManager,
             app.dependencies.firewallManager,
             app.dependencies.firewallRepository,
-            app.dependencies.captivePortalManager
+            app.dependencies.captivePortalManager,
+            app.dependencies.bootProtectionManager,
+            app.dependencies.provideSmartPolicySwitchUseCase(),
+            app.dependencies.packageRepository
         )
     }
 
@@ -174,11 +177,11 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
         adapter = PackageAdapter(
             showIcons = true, // Will be updated from settings
             onPackageClick = { pkg ->
-                Log.d(TAG, "🔘 USER ACTION: Package clicked: ${pkg.packageName}")
+                AppLogger.d(TAG, "🔘 USER ACTION: Package clicked: ${pkg.packageName}")
                 showPackageActionSheet(pkg)
             },
             onPackageLongClick = { pkg ->
-                Log.d(TAG, "🔘 USER ACTION: Package long-clicked (entering selection mode): ${pkg.packageName}")
+                AppLogger.d(TAG, "🔘 USER ACTION: Package long-clicked (entering selection mode): ${pkg.packageName}")
                 enterSelectionMode(pkg)
                 true
             }
@@ -252,10 +255,18 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
             onStateFilterSelected = { filter ->
                 // Only trigger if different from current
                 if (filter != currentStateFilter) {
+                    // Map translated string to internal constant BEFORE updating currentStateFilter
+                    val internalFilter = filter?.let { mapStateFilterToInternal(it) }
+
+                    // Exit selection mode if switching to Disabled or Uninstalled filter
+                    val isRestrictedFilter = internalFilter?.lowercase() == Constants.Packages.STATE_DISABLED.lowercase() ||
+                                              internalFilter?.lowercase() == Constants.Packages.STATE_UNINSTALLED.lowercase()
+                    if (isSelectionMode && isRestrictedFilter) {
+                        exitSelectionMode()
+                    }
+
                     // Don't clear adapter - let ViewModel handle the state transition
                     currentStateFilter = filter
-                    // Map translated string to internal constant
-                    val internalFilter = filter?.let { mapStateFilterToInternal(it) }
                     viewModel.setPackageStateFilter(internalFilter)
                 }
             },
@@ -273,7 +284,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
         binding.searchInput.addTextChangedListener { text ->
             val query = text?.toString() ?: ""
             if (query.isNotEmpty()) {
-                Log.d(TAG, "🔍 USER ACTION: Search query changed: '$query'")
+                AppLogger.d(TAG, "🔍 USER ACTION: Search query changed: '$query'")
             }
             viewModel.setSearchQuery(query)
 
@@ -283,7 +294,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
 
         // Clear icon click listener
         binding.searchLayout.setEndIconOnClickListener {
-            Log.d(TAG, "🔘 USER ACTION: Search cleared")
+            AppLogger.d(TAG, "🔘 USER ACTION: Search cleared")
             binding.searchInput.text?.clear()
             binding.searchLayout.isEndIconVisible = false
         }
@@ -374,26 +385,26 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
     }
 
     private fun setupPermissionDialog() {
-        Log.d(TAG, "setupPermissionDialog called")
+        AppLogger.d(TAG, "setupPermissionDialog called")
         // Observe privileged access status and show modal dialog when needed
         observePrivilegedAccessStatus()
     }
 
     private fun observePrivilegedAccessStatus() {
-        Log.d(TAG, "observePrivilegedAccessStatus called")
+        AppLogger.d(TAG, "observePrivilegedAccessStatus called")
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Log.d(TAG, "Starting privileged access status observation")
+                AppLogger.d(TAG, "Starting privileged access status observation")
                 // Combine both status flows to determine banner state
                 launch {
                     viewModel.rootManager.rootStatus.collect { rootStatus ->
-                        Log.d(TAG, "Root status changed: $rootStatus")
+                        AppLogger.d(TAG, "Root status changed: $rootStatus")
                         updateBannerContent(rootStatus, viewModel.shizukuManager.shizukuStatus.value)
                     }
                 }
                 launch {
                     viewModel.shizukuManager.shizukuStatus.collect { shizukuStatus ->
-                        Log.d(TAG, "Shizuku status changed: $shizukuStatus")
+                        AppLogger.d(TAG, "Shizuku status changed: $shizukuStatus")
                         updateBannerContent(viewModel.rootManager.rootStatus.value, shizukuStatus)
                     }
                 }
@@ -402,7 +413,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
     }
 
     private fun updateBannerContent(rootStatus: RootStatus, shizukuStatus: ShizukuStatus) {
-        Log.d(TAG, "updateBannerContent: rootStatus=$rootStatus, shizukuStatus=$shizukuStatus")
+        AppLogger.d(TAG, "updateBannerContent: rootStatus=$rootStatus, shizukuStatus=$shizukuStatus")
         // This method is now used to trigger the modal dialog when needed
         // The actual dialog showing is handled by observeUiState when showRootBanner becomes true
     }
@@ -423,7 +434,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
     }
 
     private fun showPermissionSetupDialog() {
-        Log.d(TAG, "showPermissionSetupDialog called")
+        AppLogger.d(TAG, "showPermissionSetupDialog called")
 
         val rootStatus = viewModel.rootManager.rootStatus.value
         val shizukuStatus = viewModel.shizukuManager.shizukuStatus.value
@@ -509,7 +520,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
         // Update package count in search field
         // Hide count if 0 results AND no search query (empty state)
         val count = displayedPackages.size
-        binding.searchLayout.suffixText = if (count == 0 && state.searchQuery.isBlank()) {
+        binding.packageCounter.text = if (count == 0 && state.searchQuery.isBlank()) {
             ""
         } else {
             resources.getQuantityString(
@@ -609,7 +620,7 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
     fun openAppDialog(packageName: String) {
         // Prevent multiple dialogs from stacking
         if (currentDialog?.isShowing == true) {
-            Log.w(TAG, "[PACKAGES] Dialog already open, dismissing before opening new one")
+            AppLogger.w(TAG, "[PACKAGES] Dialog already open, dismissing before opening new one")
             currentDialog?.dismiss()
             currentDialog = null
         }
@@ -680,13 +691,13 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
                             }
                         }
                     }.onFailure { error ->
-                        Log.e(TAG, "Failed to load package for dialog: ${error.message}")
+                        AppLogger.e(TAG, "Failed to load package for dialog: ${error.message}")
                         if (pendingDialogPackageName == packageName) {
                             pendingDialogPackageName = null
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Exception opening dialog: ${e.message}")
+                    AppLogger.e(TAG, "Exception opening dialog: ${e.message}")
                     if (pendingDialogPackageName == packageName) {
                         pendingDialogPackageName = null
                     }
@@ -1122,7 +1133,33 @@ class PackagesFragmentViews : BaseFragment<FragmentPackagesBinding>() {
         }
     }
 
+    /**
+     * Check if multi-select mode is allowed for the current filter.
+     * Multi-select is NOT allowed for Disabled or Uninstalled filters because:
+     * - Disabled packages: can't be uninstalled without enabling first
+     * - Uninstalled packages: already uninstalled, reinstall should be done individually
+     */
+    private fun isSelectionModeAllowedForCurrentFilter(): Boolean {
+        val currentState = viewModel.uiState.value.filterState.packageState?.lowercase()
+        return currentState != Constants.Packages.STATE_DISABLED.lowercase() &&
+               currentState != Constants.Packages.STATE_UNINSTALLED.lowercase()
+    }
+
     private fun enterSelectionMode(initialPackage: Package? = null) {
+        // Block selection mode for Disabled and Uninstalled filters
+        if (!isSelectionModeAllowedForCurrentFilter()) {
+            val currentState = viewModel.uiState.value.filterState.packageState?.lowercase()
+            val toastMessage = when (currentState) {
+                Constants.Packages.STATE_DISABLED.lowercase() ->
+                    getString(R.string.multiselect_toast_not_available_disabled)
+                Constants.Packages.STATE_UNINSTALLED.lowercase() ->
+                    getString(R.string.multiselect_toast_not_available_uninstalled)
+                else -> return
+            }
+            android.widget.Toast.makeText(requireContext(), toastMessage, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
         isSelectionMode = true
         adapter.setSelectionMode(true)
 

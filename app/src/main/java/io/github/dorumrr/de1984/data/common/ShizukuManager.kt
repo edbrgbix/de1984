@@ -1,9 +1,9 @@
 package io.github.dorumrr.de1984.data.common
 
+import io.github.dorumrr.de1984.utils.AppLogger
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.IBinder
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 import rikka.shizuku.SystemServiceHelper
+import rikka.sui.Sui
 
 /**
  * Manages Shizuku integration for elevated privileges without root
@@ -31,6 +32,10 @@ class ShizukuManager(private val context: Context) {
     private var hasCheckedOnce = false
     private var listenersRegistered = false
 
+    // Track if SUI (Magisk-based Shizuku) is available
+    // SUI doesn't install a separate package - it provides Shizuku API through Magisk
+    private var isSuiAvailable = false
+
     // Cache the reflection method to avoid repeated lookups
     // This is accessed via Shizuku.newProcess() which is private, so we use reflection
     private val newProcessMethod by lazy {
@@ -42,7 +47,7 @@ class ShizukuManager(private val context: Context) {
                 String::class.java
             ).apply { isAccessible = true }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cache Shizuku.newProcess() method: ${e.message}")
+            AppLogger.e(TAG, "Failed to cache Shizuku.newProcess() method: ${e.message}")
             null
         }
     }
@@ -58,33 +63,40 @@ class ShizukuManager(private val context: Context) {
 
     // Permission result listener - handles permission changes
     private val permissionResultListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        Log.d(TAG, "")
-        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.d(TAG, "║  🔧 SYSTEM EVENT: Shizuku permission result received         ║")
-        Log.d(TAG, "║  requestCode: $requestCode, grantResult: $grantResult        ║")
-        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
+        AppLogger.d(TAG, "🔧 SYSTEM EVENT: Shizuku permission result received | requestCode: $requestCode, grantResult: $grantResult")
         if (requestCode == REQUEST_CODE_PERMISSION) {
             if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "✅ Shizuku permission GRANTED - updating status to RUNNING_WITH_PERMISSION")
-                Log.d(TAG, "✅ hasShizukuPermission will now return TRUE")
+                AppLogger.d(TAG, "✅ Shizuku permission GRANTED - updating status to RUNNING_WITH_PERMISSION")
+                AppLogger.d(TAG, "✅ hasShizukuPermission will now return TRUE")
                 _shizukuStatus.value = ShizukuStatus.RUNNING_WITH_PERMISSION
             } else {
-                Log.d(TAG, "❌ Shizuku permission DENIED - updating status to RUNNING_NO_PERMISSION")
-                Log.d(TAG, "❌ hasShizukuPermission will now return FALSE")
+                AppLogger.d(TAG, "❌ Shizuku permission DENIED - updating status to RUNNING_NO_PERMISSION")
+                AppLogger.d(TAG, "❌ hasShizukuPermission will now return FALSE")
                 _shizukuStatus.value = ShizukuStatus.RUNNING_NO_PERMISSION
             }
         }
-        Log.d(TAG, "")
     }
 
     // Binder received/dead listeners - monitor Shizuku service lifecycle
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
         // Shizuku binder received, check status
-        Log.d(TAG, "")
-        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.d(TAG, "║  🔧 SYSTEM EVENT: Shizuku binder received (Shizuku started)  ║")
-        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-        Log.d(TAG, "")
+        AppLogger.d(TAG, "🔧 SYSTEM EVENT: Shizuku binder received (Shizuku started)")
+
+        // Per @embeddedtofu suggestion, re-check SUI availability on reconnection
+        // This handles the case where SUI module was enabled/disabled since app start
+        // Pattern: Sui.init() initializes, Sui.isSui() confirms it's actually SUI.
+        try {
+            val suiInitResult = Sui.init(context.packageName)
+            val previousSuiState = isSuiAvailable
+            isSuiAvailable = suiInitResult && Sui.isSui()
+            if (isSuiAvailable != previousSuiState) {
+                AppLogger.d(TAG, "🔧 SUI availability changed: $previousSuiState → $isSuiAvailable")
+            }
+            AppLogger.d(TAG, "🔧 SUI check on reconnect: init=$suiInitResult, isSui=${if (suiInitResult) Sui.isSui() else "N/A"}, isSuiAvailable=$isSuiAvailable")
+        } catch (e: Exception) {
+            AppLogger.d(TAG, "🔧 SUI check failed on reconnect (expected if not installed): ${e.message}")
+            isSuiAvailable = false
+        }
 
         // Update Shizuku status
         checkShizukuStatusSync()
@@ -96,16 +108,12 @@ class ShizukuManager(private val context: Context) {
         // 3. Start firewall if it was down waiting for privileges
         //
         // No additional action needed here - the reactive flow handles everything!
-        Log.d(TAG, "Shizuku status updated - FirewallManager will handle any needed backend switch")
+        AppLogger.d(TAG, "Shizuku status updated - FirewallManager will handle any needed backend switch")
     }
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
         // Shizuku binder died
-        Log.d(TAG, "")
-        Log.d(TAG, "╔════════════════════════════════════════════════════════════════╗")
-        Log.d(TAG, "║  🔧 SYSTEM EVENT: Shizuku binder died (Shizuku stopped)      ║")
-        Log.d(TAG, "╚════════════════════════════════════════════════════════════════╝")
-        Log.d(TAG, "")
+        AppLogger.d(TAG, "🔧 SYSTEM EVENT: Shizuku binder died (Shizuku stopped)")
         _shizukuStatus.value = ShizukuStatus.INSTALLED_NOT_RUNNING
     }
 
@@ -115,24 +123,24 @@ class ShizukuManager(private val context: Context) {
     suspend fun checkShizukuStatus() {
         val currentStatus = _shizukuStatus.value
 
-        Log.d(TAG, "=== checkShizukuStatus() called ===")
-        Log.d(TAG, "Current status: $currentStatus, hasCheckedOnce: $hasCheckedOnce")
+        AppLogger.d(TAG, "=== checkShizukuStatus() called ===")
+        AppLogger.d(TAG, "Current status: $currentStatus, hasCheckedOnce: $hasCheckedOnce")
 
         // Only skip check if we have definitive permission
         if (hasCheckedOnce && currentStatus == ShizukuStatus.RUNNING_WITH_PERMISSION) {
-            Log.d(TAG, "Skipping check - already have permission")
+            AppLogger.d(TAG, "Skipping check - already have permission")
             return
         }
 
         if (!hasCheckedOnce) {
             _shizukuStatus.value = ShizukuStatus.CHECKING
-            Log.d(TAG, "First check - setting status to CHECKING")
+            AppLogger.d(TAG, "First check - setting status to CHECKING")
         }
 
         val newStatus = checkShizukuStatusInternal()
         _shizukuStatus.value = newStatus
         hasCheckedOnce = true
-        Log.d(TAG, "Shizuku status check complete: $newStatus")
+        AppLogger.d(TAG, "Shizuku status check complete: $newStatus")
     }
 
     /**
@@ -150,48 +158,65 @@ class ShizukuManager(private val context: Context) {
 
     private suspend fun checkShizukuStatusInternal(): ShizukuStatus = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Checking if Shizuku is installed...")
-            // Check if Shizuku is installed
+            val source = if (isSuiAvailable) "SUI (Magisk)" else "Shizuku"
+            AppLogger.d(TAG, "Checking if $source is installed... (isSuiAvailable=$isSuiAvailable)")
+
+            // Check if Shizuku/SUI is installed
             val installed = isShizukuInstalled()
             if (!installed) {
-                Log.d(TAG, "Shizuku is NOT_INSTALLED")
+                AppLogger.d(TAG, "$source is NOT_INSTALLED")
                 return@withContext ShizukuStatus.NOT_INSTALLED
             }
 
-            Log.d(TAG, "Shizuku is installed, checking if running...")
-            // Check if Shizuku is running
+            AppLogger.d(TAG, "$source is installed, checking if service is running...")
+            // Check if Shizuku service is running (works for both SUI and standalone Shizuku)
             val running = isShizukuRunning()
             if (!running) {
-                Log.d(TAG, "Shizuku is INSTALLED_NOT_RUNNING")
+                AppLogger.d(TAG, "$source is INSTALLED_NOT_RUNNING (binder not responding)")
                 return@withContext ShizukuStatus.INSTALLED_NOT_RUNNING
             }
 
-            Log.d(TAG, "Shizuku is running, checking permission...")
+            AppLogger.d(TAG, "$source service is running, checking permission...")
             // Check permission
             val hasPermission = checkShizukuPermissionSync()
             if (!hasPermission) {
-                Log.d(TAG, "Shizuku is RUNNING_NO_PERMISSION")
+                AppLogger.d(TAG, "$source is RUNNING_NO_PERMISSION")
                 return@withContext ShizukuStatus.RUNNING_NO_PERMISSION
             }
 
-            Log.d(TAG, "Shizuku is RUNNING_WITH_PERMISSION")
+            AppLogger.d(TAG, "$source is RUNNING_WITH_PERMISSION ✅")
             ShizukuStatus.RUNNING_WITH_PERMISSION
         } catch (e: Exception) {
-            Log.e(TAG, "Exception during Shizuku check: ${e.message}", e)
+            AppLogger.e(TAG, "Exception during Shizuku/SUI check: ${e.message}", e)
             ShizukuStatus.NOT_INSTALLED
         }
     }
 
     /**
-     * Check if Shizuku app is installed
+     * Check if Shizuku/SUI is installed
+     *
+     * Important: SUI (Magisk-based Shizuku) doesn't install a separate package.
+     * It provides the Shizuku API through Magisk modules. So we need to check:
+     * 1. If SUI was successfully initialized (isSuiAvailable), OR
+     * 2. If the standalone Shizuku app package is installed
      */
     fun isShizukuInstalled(): Boolean {
+        // If SUI is available, Shizuku API is available without a separate package
+        if (isSuiAvailable) {
+            AppLogger.d(TAG, "isShizukuInstalled: SUI is available (no package needed)")
+            return true
+        }
+
+        // Check for standalone Shizuku app
         return try {
             context.packageManager.getPackageInfo(SHIZUKU_PACKAGE_NAME, 0)
+            AppLogger.d(TAG, "isShizukuInstalled: Standalone Shizuku package found")
             true
         } catch (e: PackageManager.NameNotFoundException) {
+            AppLogger.d(TAG, "isShizukuInstalled: No Shizuku package and no SUI")
             false
         } catch (e: Exception) {
+            AppLogger.d(TAG, "isShizukuInstalled: Error checking package: ${e.message}")
             false
         }
     }
@@ -230,15 +255,15 @@ class ShizukuManager(private val context: Context) {
      */
     fun requestShizukuPermission() {
         try {
-            Log.d(TAG, "requestShizukuPermission() called")
+            AppLogger.d(TAG, "requestShizukuPermission() called")
             if (isShizukuRunning()) {
-                Log.d(TAG, "Shizuku is running - requesting permission via Shizuku.requestPermission()")
+                AppLogger.d(TAG, "Shizuku is running - requesting permission via Shizuku.requestPermission()")
                 Shizuku.requestPermission(REQUEST_CODE_PERMISSION)
             } else {
-                Log.d(TAG, "Shizuku is not running - cannot request permission")
+                AppLogger.d(TAG, "Shizuku is not running - cannot request permission")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to request Shizuku permission: ${e.message}", e)
+            AppLogger.e(TAG, "Failed to request Shizuku permission: ${e.message}", e)
         }
     }
 
@@ -343,19 +368,38 @@ class ShizukuManager(private val context: Context) {
      */
     fun registerListeners() {
         if (listenersRegistered) {
-            Log.d(TAG, "Shizuku listeners already registered, skipping")
+            AppLogger.d(TAG, "Shizuku listeners already registered, skipping")
             return
         }
 
         try {
-            Log.d(TAG, "🔧 Registering Shizuku listeners")
+            // Initialize Sui if available (required for SUI support)
+            // This must be called before any Shizuku API usage when SUI is installed
+            // Returns true if SUI is available, false otherwise (no exception thrown)
+            //
+            // IMPORTANT: SUI (Magisk-based Shizuku) doesn't install a separate package.
+            // When Sui.init() returns true, we must track this to bypass package installation checks.
+            try {
+                isSuiAvailable = Sui.init(context.packageName)
+                if (isSuiAvailable) {
+                    AppLogger.d(TAG, "✅ Sui initialized successfully - SUI is available (Magisk module)")
+                    AppLogger.d(TAG, "   SUI provides Shizuku API without separate package installation")
+                } else {
+                    AppLogger.d(TAG, "ℹ️ Sui not available - will check for standalone Shizuku or root")
+                }
+            } catch (e: Exception) {
+                AppLogger.d(TAG, "ℹ️ Sui initialization failed (expected if SUI not installed): ${e.message}")
+                isSuiAvailable = false
+            }
+
+            AppLogger.d(TAG, "🔧 Registering Shizuku listeners")
             Shizuku.addRequestPermissionResultListener(permissionResultListener)
             Shizuku.addBinderReceivedListener(binderReceivedListener)
             Shizuku.addBinderDeadListener(binderDeadListener)
             listenersRegistered = true
-            Log.d(TAG, "✅ Shizuku listeners registered successfully")
+            AppLogger.d(TAG, "✅ Shizuku listeners registered successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to register Shizuku listeners: ${e.message}", e)
+            AppLogger.e(TAG, "❌ Failed to register Shizuku listeners: ${e.message}", e)
         }
     }
 
@@ -387,23 +431,23 @@ class ShizukuManager(private val context: Context) {
      */
     suspend fun getSystemServiceBinder(serviceName: String): IBinder? = withContext(Dispatchers.IO) {
         if (!hasShizukuPermission) {
-            Log.e(TAG, "Cannot get system service binder: No Shizuku permission")
+            AppLogger.e(TAG, "Cannot get system service binder: No Shizuku permission")
             return@withContext null
         }
 
         try {
-            Log.d(TAG, "Getting system service binder for: $serviceName")
+            AppLogger.d(TAG, "Getting system service binder for: $serviceName")
             val serviceBinder = SystemServiceHelper.getSystemService(serviceName)
             if (serviceBinder == null) {
-                Log.e(TAG, "Failed to get system service: $serviceName (service returned null)")
+                AppLogger.e(TAG, "Failed to get system service: $serviceName (service returned null)")
                 return@withContext null
             }
 
             val wrappedBinder = ShizukuBinderWrapper(serviceBinder)
-            Log.d(TAG, "✅ Successfully got system service binder for: $serviceName")
+            AppLogger.d(TAG, "✅ Successfully got system service binder for: $serviceName")
             return@withContext wrappedBinder
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get system service binder: $serviceName", e)
+            AppLogger.e(TAG, "Failed to get system service binder: $serviceName", e)
             return@withContext null
         }
     }

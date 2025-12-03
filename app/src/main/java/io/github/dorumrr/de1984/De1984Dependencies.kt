@@ -1,9 +1,12 @@
 package io.github.dorumrr.de1984
 
 import android.content.Context
+import io.github.dorumrr.de1984.utils.AppLogger
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import io.github.dorumrr.de1984.data.common.BootProtectionManager
 import io.github.dorumrr.de1984.data.common.CaptivePortalManager
 import io.github.dorumrr.de1984.data.common.ErrorHandler
 import io.github.dorumrr.de1984.data.common.PermissionManager
@@ -32,6 +35,27 @@ import io.github.dorumrr.de1984.ui.common.SuperuserBannerState
  */
 class De1984Dependencies(private val context: Context) {
 
+    companion object {
+        private const val TAG = "De1984Dependencies"
+
+        @Volatile
+        private var INSTANCE: De1984Dependencies? = null
+
+        fun getInstance(context: Context): De1984Dependencies {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: De1984Dependencies(context.applicationContext).also {
+                    INSTANCE = it
+                }
+            }
+        }
+
+        fun get(): De1984Dependencies {
+            return INSTANCE ?: throw IllegalStateException(
+                "De1984Dependencies not initialized. Call getInstance(context) first."
+            )
+        }
+    }
+
     // =============================================================================================
     // Database
     // =============================================================================================
@@ -50,6 +74,12 @@ class De1984Dependencies(private val context: Context) {
             "de1984_database"
         )
             .addMigrations(MIGRATION_4_5)
+            .fallbackToDestructiveMigration()
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
+                    AppLogger.w(TAG, "Database destructive migration triggered - firewall rules reset to defaults")
+                }
+            })
             .build()
     }
 
@@ -83,6 +113,10 @@ class De1984Dependencies(private val context: Context) {
 
     val captivePortalManager: CaptivePortalManager by lazy {
         CaptivePortalManager(context, rootManager, shizukuManager)
+    }
+
+    val bootProtectionManager: BootProtectionManager by lazy {
+        BootProtectionManager(context, rootManager, shizukuManager)
     }
 
     // =============================================================================================
@@ -163,6 +197,10 @@ class De1984Dependencies(private val context: Context) {
         return BlockAllAppsUseCase(firewallRepository)
     }
 
+    fun provideSmartPolicySwitchUseCase(): SmartPolicySwitchUseCase {
+        return SmartPolicySwitchUseCase(firewallRepository, context)
+    }
+
     fun provideGetBlockedCountUseCase(): GetBlockedCountUseCase {
         return GetBlockedCountUseCase(firewallRepository)
     }
@@ -181,25 +219,6 @@ class De1984Dependencies(private val context: Context) {
 
     fun provideUpdateFirewallRuleUseCase(): UpdateFirewallRuleUseCase {
         return UpdateFirewallRuleUseCase(firewallRepository)
-    }
-
-    companion object {
-        @Volatile
-        private var INSTANCE: De1984Dependencies? = null
-
-        fun getInstance(context: Context): De1984Dependencies {
-            return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: De1984Dependencies(context.applicationContext).also {
-                    INSTANCE = it
-                }
-            }
-        }
-
-        fun get(): De1984Dependencies {
-            return INSTANCE ?: throw IllegalStateException(
-                "De1984Dependencies not initialized. Call getInstance(context) first."
-            )
-        }
     }
 }
 

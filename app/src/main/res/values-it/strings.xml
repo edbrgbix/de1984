@@ -42,12 +42,32 @@
     <string name="dialog_firewall_start_confirm">Avvia Firewall</string>
     <string name="dialog_firewall_start_skip">Più tardi</string>
 
+    <string name="dialog_firewall_stop_title">Fermare il Firewall?</string>
+    <string name="dialog_firewall_stop_message">⚠️ Fermare il firewall consentirà a tutte le app di accedere a internet.\n\nLa protezione della tua privacy sarà disabilitata fino a quando non riattiverai il firewall.</string>
+    <string name="dialog_firewall_stop_confirm">Ferma Firewall</string>
+
     <string name="dialog_policy_change_title">Cambiare la policy predefinita?</string>
     <string name="dialog_policy_change_confirm">Cambia Policy</string>
     <string name="dialog_policy_change_cancel">Annulla</string>
 
     <string name="dialog_vpn_warning_title">ATTENZIONE: Una VPN è attiva!</string>
     <string name="dialog_vpn_warning_message">Consenti l’app VPN nel firewall per evitare problemi di connessione.</string>
+
+    <!-- Quick Toggle Dialogs -->
+    <string name="dialog_quick_toggle_block_title">Bloccare %1$s?</string>
+    <string name="dialog_quick_toggle_allow_title">Consentire %1$s?</string>
+    <string name="dialog_quick_toggle_message_wifi">Questo %1$s l\'accesso WiFi per %2$s</string>
+    <string name="dialog_quick_toggle_message_mobile">Questo %1$s l\'accesso dati mobili per %2$s</string>
+    <string name="dialog_quick_toggle_message_roaming">Questo %1$s l\'accesso roaming per %2$s</string>
+    <string name="dialog_quick_toggle_action_block">bloccherà</string>
+    <string name="dialog_quick_toggle_action_allow">consentirà</string>
+    <string name="snackbar_wifi_blocked">WiFi bloccato per %s</string>
+    <string name="snackbar_wifi_allowed">WiFi consentito per %s</string>
+    <string name="snackbar_mobile_blocked">Dati mobili bloccati per %s</string>
+    <string name="snackbar_mobile_allowed">Dati mobili consentiti per %s</string>
+    <string name="snackbar_roaming_blocked">Roaming bloccato per %s</string>
+    <string name="snackbar_roaming_allowed">Roaming consentito per %s</string>
+    <string name="snackbar_undo">Annulla</string>
 
     <string name="firewall_system_package_warning">⚠️ Pacchetto di sistema</string>
 
@@ -128,10 +148,12 @@
     <string name="permission_tier_battery_desc">Evita che il firewall venga chiuso da Android. Essenziale per la VPN.</string>
     <string name="permission_tier_advanced_desc">Controllo pacchetti e operazioni di sistema (Shizuku o root)</string>
     <string name="permission_tier_vpn_desc">Abilita il fallback VPN per mantenere il firewall attivo</string>
+    <string name="permission_tier_vpn_desc_privileged">Non necessario quando si utilizza un backend firewall privilegiato (iptables/ConnectivityManager). Richiesto solo come fallback.</string>
 
     <!-- Permission Tier Status -->
     <string name="permission_status_completed">Completato</string>
     <string name="permission_status_required">Permesso richiesto</string>
+    <string name="permission_status_not_required">Non richiesto</string>
     <string name="permission_status_shizuku_or_root_required">Richiede Shizuku o Root</string>
 
     <!-- Permission Tier Buttons -->
@@ -143,6 +165,8 @@
     <!-- Multi-Select Package Operations -->
     <string name="multiselect_toast_cannot_select_critical">I pacchetti critici devono essere disinstallati singolarmente</string>
     <string name="multiselect_toast_selection_limit">È possibile selezionare massimo 50 pacchetti</string>
+    <string name="multiselect_toast_not_available_disabled">Selezione multipla non disponibile per i pacchetti disabilitati</string>
+    <string name="multiselect_toast_not_available_uninstalled">Selezione multipla non disponibile per i pacchetti disinstallati</string>
     <string name="multiselect_toolbar_title_format">%d selezionati</string>
     <string name="multiselect_toolbar_button_uninstall">Disinstalla</string>
     <string name="multiselect_toolbar_button_reinstall">Reinstalla</string>
@@ -169,6 +193,27 @@
     <string name="multiselect_progress_message_format_reinstall">Reinstallazione %1$d di %2$d…</string>
 
     <string name="multiselect_checkbox_content_description">Seleziona pacchetto</string>
+    <string name="multiselect_toast_limit_reached">È possibile selezionare al massimo %d pacchetti alla volta</string>
+
+    <!-- Firewall Multi-Select -->
+    <string name="firewall_multiselect_toast_cannot_select_critical">I pacchetti critici/VPN non possono essere selezionati</string>
+    <string name="firewall_multiselect_toolbar_button_block">Blocca</string>
+    <string name="firewall_multiselect_toolbar_button_allow">Consenti</string>
+    <string name="firewall_multiselect_toolbar_button_rules">Modifica regole</string>
+    <string name="firewall_multiselect_dialog_title_block">Bloccare %d app selezionate?</string>
+    <string name="firewall_multiselect_dialog_title_allow">Consentire %d app selezionate?</string>
+    <string name="firewall_multiselect_dialog_message">Questo cambierà l\'accesso alla rete per %d app.</string>
+    <string name="firewall_multiselect_dialog_title_results">Risultati Firewall</string>
+    <string name="firewall_multiselect_dialog_message_success_format">✓ %2$s con successo: %1$d app</string>
+    <string name="firewall_multiselect_dialog_message_failed_format">✓ %1$d riuscite, ✗ %2$d non riuscite a %3$s</string>
+
+    <!-- Firewall Multi-Select Bottom Sheet -->
+    <string name="firewall_multiselect_sheet_header_format">%d pacchetti selezionati</string>
+    <string name="firewall_multiselect_sheet_section_network_rules">Regole di rete</string>
+    <string name="firewall_multiselect_sheet_state_mixed">Misto</string>
+    <string name="firewall_multiselect_sheet_quick_actions">Azioni rapide</string>
+    <string name="firewall_multiselect_sheet_allow_all">Consenti tutte le reti</string>
+    <string name="firewall_multiselect_sheet_block_all">Blocca tutte le reti</string>
 
     <!-- Theme -->
     <string name="theme_light">Tema Chiaro</string>
@@ -302,6 +347,11 @@
     <string name="vpn_fallback_notification_text">Il backend privilegiato è fallito. Tocca per abilitare il fallback VPN.</string>
     <string name="vpn_fallback_notification_action_text">Abilita VPN Fallback</string>
 
+    <!-- VPN Conflict Notification -->
+    <string name="vpn_conflict_notification_title">Firewall Non Attivo - Conflitto VPN</string>
+    <string name="vpn_conflict_notification_text">Un\'altra VPN è attiva. De1984 necessita del permesso VPN per ripristinare la protezione del firewall. Questo sostituirà la tua connessione VPN corrente. Tocca per concedere il permesso.</string>
+    <string name="vpn_conflict_notification_action_text">Sostituisci VPN &amp; Abilita Firewall</string>
+
     <string name="vpn_fallback_tier_title">VPN Fallback</string>
     <string name="vpn_fallback_tier_description">Abilita fallback automatico alla VPN quando i backend privilegiati falliscono.</string>
     <string name="vpn_fallback_tier_status_granted">Completato</string>
@@ -320,6 +370,7 @@
     <string name="language_portuguese">Português (Portoghese)</string>
     <string name="language_chinese">中文 (Cinese)</string>
     <string name="language_italian">Italiano</string>
+    <string name="language_french">Français (Francese)</string>
 
     <!-- Settings Screen -->
     <string name="settings_app_version">Versione %s</string>
@@ -361,6 +412,10 @@
     <string name="settings_show_icons_title">Mostra Icone App</string>
     <string name="settings_show_icons_description">Può velocizzare l’app se disattivato</string>
 
+    <string name="settings_boot_protection_title">Protezione all\'Avvio</string>
+    <string name="settings_boot_protection_description">Blocca tutto il traffico di rete durante l\'avvio del dispositivo fino all\'attivazione del firewall (richiede root)</string>
+    <string name="settings_boot_protection_unavailable">Richiede accesso root</string>
+
     <string name="settings_new_app_notifications_title">Notifiche Nuove App</string>
     <string name="settings_new_app_notifications_description">Mostra notifiche quando vengono installate nuove app con permessi di rete</string>
 
@@ -373,6 +428,9 @@
     <string name="settings_show_firewall_prompt_title">Mostra Prompt di Avvio Firewall</string>
     <string name="settings_show_firewall_prompt_description">Mostra un avviso per avviare il firewall quando l’app si apre</string>
 
+    <string name="settings_confirm_rule_changes_title">Conferma Modifiche Regole</string>
+    <string name="settings_confirm_rule_changes_description">Mostra una finestra di conferma quando tocchi le icone di rete per cambiare le regole</string>
+
     <string name="settings_dynamic_color_title">Usa Colori Dinamici</string>
     <string name="settings_dynamic_color_description">Adatta i colori dell’app al tuo wallpaper (Android 12+)</string>
 
@@ -380,6 +438,31 @@
     <string name="settings_backup_restore_description">Salva e ripristina le regole del firewall</string>
     <string name="settings_backup_button">Backup</string>
     <string name="settings_restore_button">Ripristina</string>
+
+    <!-- Export/Import Uninstalled Apps -->
+    <string name="settings_uninstalled_apps_title">App disinstallate</string>
+    <string name="settings_uninstalled_apps_description">Esporta e importa l\'elenco dei pacchetti di sistema disinstallati</string>
+    <string name="button_export_uninstalled_apps">Esporta</string>
+    <string name="button_import_uninstalled_apps">Importa</string>
+
+    <!-- Export Messages -->
+    <string name="success_export_uninstalled">✅ Esportazione riuscita: %d pacchetti</string>
+    <string name="error_export_requires_privileges">❌ Root o Shizuku richiesto per esportare app disinstallate</string>
+    <string name="error_export_no_uninstalled_apps">Nessun pacchetto di sistema disinstallato trovato</string>
+    <string name="error_export_failed">Esportazione fallita: %s</string>
+
+    <!-- Import Messages -->
+    <string name="dialog_import_preview_title">Importa &amp; disinstalla app</string>
+    <string name="dialog_import_preview_message">Trovati %1$d pacchetti da disinstallare:\n\n%2$s\n\n⚠️ Questo disinstallerà tutte le app elencate.</string>
+    <string name="dialog_import_warning_title">Alcuni pacchetti non trovati</string>
+    <string name="dialog_import_warning_message">%1$d di %2$d pacchetti trovati.\n\nTrovati:\n%3$s\n\nNon trovati:\n%4$s\n\nContinuare con i pacchetti trovati?</string>
+    <string name="dialog_import_failed_title">Importazione fallita</string>
+    <string name="dialog_import_all_not_found">❌ Nessuno dei %d pacchetti nel file è attualmente installato</string>
+    <string name="dialog_import_empty_file">❌ Il file è vuoto o non contiene nomi di pacchetti validi</string>
+    <string name="dialog_import_confirm">Disinstalla tutto</string>
+    <string name="error_import_requires_privileges">❌ Root o Shizuku richiesto per disinstallare app</string>
+    <string name="error_import_file_read_failed">Lettura file fallita: %s</string>
+    <string name="error_import_failed">Importazione fallita: %s</string>
 
     <string name="settings_captive_portal_title">Controllo Captive Portal</string>
     <string name="settings_captive_portal_description">Gestisci il sistema di rilevamento Captive Portal</string>
@@ -478,17 +561,20 @@
     <string name="firewall_network_label_wifi">WiFi</string>
     <string name="firewall_network_label_mobile">Dati Mobili</string>
     <string name="firewall_network_label_roaming">Roaming</string>
-    <string name="firewall_network_label_lan">Blocca Accesso LAN</string>
+    <string name="firewall_network_label_lan">Accesso LAN</string>
+    <string name="firewall_lan_requires_root">Richiede accesso root</string>
     <string name="firewall_network_label_background_access">Accesso in Background</string>
-    <string name="firewall_network_label_block_internet">Blocca Internet</string>
+    <string name="firewall_network_label_internet_access">Accesso Internet</string>
+    <string name="firewall_internet_access_subtitle">WiFi, Mobile, Roaming</string>
     <string name="firewall_background_access_description">Permetti l’accesso internet dell’app in background</string>
-    <string name="firewall_connectivity_manager_info">Questo blocca tutti i tipi di rete (WiFi, Mobile, Roaming).\n\nIl firewall di sistema non supporta il controllo granulare. Per la gestione avanzata è necessario il root.</string>
-    <string name="firewall_block_all_info">Questo blocca tutti i tipi di rete (WiFi, Mobile, Roaming).</string>
+    <string name="firewall_connectivity_manager_info">Il firewall di sistema non supporta il controllo granulare. Per la gestione avanzata è necessario il root.</string>
     <string name="firewall_system_critical_info">⚠️ Pacchetto di Sistema Critico — Non è possibile modificare l’accesso alla rete per evitare instabilità.</string>
     <string name="firewall_vpn_app_info">🔒 App VPN — Sempre consentita per evitare problemi di riconnessione della VPN dopo blocco/sblocco del dispositivo.</string>
     <string name="firewall_critical_allowed_info">⚠️ La protezione dei pacchetti critici è disabilitata nelle Impostazioni. Bloccare l\'accesso alla rete può causare instabilità del sistema o problemi VPN.</string>
     <string name="firewall_badge_system_critical">Sistema Critico</string>
     <string name="firewall_badge_vpn_app">App VPN</string>
+    <string name="firewall_badge_no_internet">Nessun Permesso Internet</string>
+    <string name="firewall_no_internet_info">ℹ️ Questa app attualmente non ha il permesso internet dichiarato nel suo manifest.\n\nBloccandola ora avrà effetto se l\'app ottiene il permesso internet in un aggiornamento futuro, fornendo protezione proattiva.</string>
 
     <!-- Protection Warning Banner -->
     <string name="protection_banner_title">🛡️ Pacchetto Protetto</string>
@@ -581,10 +667,16 @@
     <string name="batch_uninstall_dialog_and_more">… e altre %d</string>
     <string name="batch_uninstall_results_and_more">… e altre %d</string>
     <string name="batch_uninstall_results_error_prefix">  Errore: %s</string>
+    <string name="batch_uninstall_progress_title">Disinstallazione app</string>
+    <string name="batch_uninstall_progress_message">Disinstallazione di %1$d su %2$d app…</string>
+    <string name="batch_uninstall_results_title">Risultati disinstallazione</string>
+    <string name="batch_uninstall_results_success">✅ Disinstallate con successo %d app:</string>
+    <string name="batch_uninstall_results_failed">❌ Impossibile disinstallare %d app:</string>
 
     <!-- Common Dialog Strings -->
     <string name="dialog_ok">OK</string>
     <string name="dialog_cancel">Annulla</string>
+    <string name="dialog_continue">Continua</string>
     <string name="dialog_error_title">Errore</string>
     <string name="dialog_no_access_message">❌ Nessun Accesso Privilegiato Disponibile\n\nIl dispositivo non sembra essere rootato. Per abilitare le funzioni avanzate di controllo pacchetti:\n• Installa e configura Shizuku (consigliato — non richiede root)\n• Oppure effettua il root del dispositivo tramite Magisk, KernelSU o APatch</string>
     <string name="dialog_root_denied_message">❌ Accesso Root Negato\n\nIl dispositivo è rootato, ma l’app ha negato il permesso superuser.\n\nPer concedere l’accesso:\n• Apri la tua app superuser (Magisk, KernelSU, APatch, ecc.) e concedi il permesso a De1984\n• Se il popup non appare, reinstalla l’app ed accetta il permesso al primo avvio\n• Oppure aggiungi manualmente De1984 nell’app superuser</string>
@@ -644,6 +736,7 @@
     <string name="error_unable_to_allow_network">Impossibile consentire l’accesso alla rete. Root richiesto.</string>
     <string name="error_unable_to_block_network">Impossibile bloccare l’accesso alla rete. Root richiesto.</string>
     <string name="error_failed_to_block_mobile">Impossibile bloccare la rete mobile: %s</string>
+    <string name="error_failed_to_block_roaming">Impossibile bloccare il roaming: %s</string>
     <string name="error_failed_to_unblock_roaming">Impossibile sbloccare il roaming: %s</string>
 
     <!-- Captive Portal Error Messages -->
@@ -659,10 +752,38 @@
     <string name="success_original_settings_restored">Impostazioni originali ripristinate con successo</string>
     <string name="success_reset_to_google_defaults">Ripristino ai valori Google completato</string>
 
+    <!-- Boot Protection Dialogs -->
+    <string name="boot_protection_enable_warning_title">Attivare Protezione all\'Avvio?</string>
+    <string name="boot_protection_enable_warning_message">Questo bloccherà TUTTO il traffico di rete durante l\'avvio del dispositivo fino a quando De1984 si avvia.\n\n⚠️ Se De1984 non riesce ad avviarsi, il dispositivo non avrà rete.\n\nOpzioni di recupero:\n1. Apri De1984 → Impostazioni → Disattiva Protezione all\'Avvio → Riavvia\n2. Se non funziona, usa ADB:\n   adb shell\n   su\n   rm /data/adb/post-fs-data.d/de1984_boot_protection.sh\n   reboot</string>
+    <string name="boot_protection_disable_warning_title">Disattivare Protezione all\'Avvio?</string>
+    <string name="boot_protection_disable_warning_message">Il traffico di rete non sarà più bloccato durante l\'avvio. Le app potrebbero perdere dati prima che il firewall si avvii.\n\nNota: Questa modifica avrà effetto al prossimo riavvio.</string>
+    <string name="boot_protection_enabled_success">Protezione all\'avvio attivata con successo</string>
+    <string name="boot_protection_disabled_success">Protezione all\'avvio disattivata con successo</string>
+    <string name="boot_protection_enable_failed">Impossibile attivare la protezione all\'avvio: %s</string>
+    <string name="boot_protection_disable_failed">Impossibile disattivare la protezione all\'avvio: %s</string>
+
     <!-- Input Hints -->
     <string name="hint_detection_mode">Modalità di rilevamento</string>
     <string name="hint_server_preset">Preset server</string>
     <string name="hint_custom_http_url">URL HTTP personalizzato</string>
     <string name="hint_custom_https_url">URL HTTPS personalizzato</string>
+
+    <!-- App Logs -->
+    <string name="logs_title">Log applicazione</string>
+    <string name="logs_menu_item">Log applicazione</string>
+    <string name="logs_menu_description">Visualizza i log per la risoluzione dei problemi</string>
+    <string name="logs_enable_title">Abilita registrazione</string>
+    <string name="logs_enable_description">Salva i log su file per il debug. I log non vengono inviati da nessuna parte.</string>
+    <string name="logs_debug_mode_note">ℹ️ Build debug - registrazione abilitata per impostazione predefinita</string>
+    <string name="logs_clear">Cancella</string>
+    <string name="logs_clear_confirm_title">Cancellare i log?</string>
+    <string name="logs_clear_confirm_message">Questo eliminerà le voci di log esistenti.</string>
+    <string name="logs_share">Condividi log</string>
+    <string name="logs_count">%d voci di log</string>
+    <string name="logs_file_info">%1$d righe • %2$s</string>
+    <string name="logs_empty">Nessun log ancora. Abilita la registrazione e usa l\'app per generare log.</string>
+    <string name="logs_cleared">Log cancellati</string>
+    <string name="logs_share_title">Condividi log De1984</string>
+    <string name="logs_disabled_message">Registrazione disabilitata. I nuovi log non verranno registrati.</string>
 
 </resources>
